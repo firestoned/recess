@@ -1,0 +1,1365 @@
+{
+  "version": 1,
+  "meta": {
+    "lastScanned": "2026-11-20T05:27:18.763Z",
+    "fileCount": 18,
+    "hits": 0,
+    "misses": 0,
+    "renderedHash": "ce6da38dfa770fec4e290fabf007291f9b46003fd50812939ddbcc9412729224",
+    "storeUpdatedAt": "2026-11-20T05:27:18.763Z",
+    "rootHash": "eaa9341321c64c71"
+  },
+  "files": {
+    ".gitignore": {
+      "description": "Git ignore rules",
+      "tokens": 3,
+      "hash": "44c92e3a70ad3307",
+      "size": 8,
+      "mtimeMs": 1795150236834.6333,
+      "updatedAt": "2026-11-20T05:27:18.712Z",
+      "source": "scan",
+      "importance": 0.1354
+    },
+    "AGENTS.md": {
+      "description": "OpenWolf",
+      "tokens": 75,
+      "hash": "e401f79554a8d796",
+      "size": 297,
+      "mtimeMs": 1795152438699.7808,
+      "updatedAt": "2026-11-20T05:27:18.713Z",
+      "source": "scan",
+      "importance": 0.1354
+    },
+    "assets/app.css": {
+      "description": "Styles: 105 rules, 34 vars, 2 media queries, 4 animations",
+      "tokens": 5440,
+      "hash": "c571e0354e112c1d",
+      "size": 19039,
+      "mtimeMs": 1795152333180.157,
+      "updatedAt": "2026-11-20T05:27:18.713Z",
+      "source": "scan",
+      "importance": 0.1354
+    },
+    "assets/app.js": {
+      "description": "SPDX-License-Identifier: Apache-2.0",
+      "tokens": 8008,
+      "hash": "6237b14fd392add7",
+      "size": 28054,
+      "mtimeMs": 1795152333180.5217,
+      "updatedAt": "2026-11-20T05:27:18.715Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "$",
+          "kind": "fn",
+          "startLine": 21,
+          "endLine": 21,
+          "tokens": 14
+        },
+        {
+          "name": "el",
+          "kind": "fn",
+          "startLine": 23,
+          "endLine": 31,
+          "tokens": 76
+        },
+        {
+          "name": "facts",
+          "kind": "fn",
+          "startLine": 33,
+          "endLine": 40,
+          "tokens": 88
+        },
+        {
+          "name": "chips",
+          "kind": "fn",
+          "startLine": 42,
+          "endLine": 46,
+          "tokens": 45
+        },
+        {
+          "name": "secretTag",
+          "kind": "fn",
+          "startLine": 49,
+          "endLine": 57,
+          "tokens": 78
+        },
+        {
+          "name": "ips",
+          "kind": "fn",
+          "startLine": 60,
+          "endLine": 69,
+          "tokens": 78
+        },
+        {
+          "name": "section",
+          "kind": "fn",
+          "startLine": 71,
+          "endLine": 73,
+          "tokens": 30
+        },
+        {
+          "name": "ts",
+          "kind": "fn",
+          "startLine": 75,
+          "endLine": 75,
+          "tokens": 15
+        },
+        {
+          "name": "clock",
+          "kind": "fn",
+          "startLine": 76,
+          "endLine": 79,
+          "tokens": 34
+        },
+        {
+          "name": "dur",
+          "kind": "fn",
+          "startLine": 80,
+          "endLine": 86,
+          "tokens": 71
+        },
+        {
+          "name": "epoch",
+          "kind": "fn",
+          "startLine": 87,
+          "endLine": 92,
+          "tokens": 66
+        },
+        {
+          "name": "quoteArgs",
+          "kind": "fn",
+          "startLine": 93,
+          "endLine": 95,
+          "tokens": 42
+        },
+        {
+          "name": "safeLink",
+          "kind": "fn",
+          "startLine": 96,
+          "endLine": 106,
+          "tokens": 98
+        },
+        {
+          "name": "freshModel",
+          "kind": "fn",
+          "startLine": 116,
+          "endLine": 122,
+          "tokens": 88
+        },
+        {
+          "name": "buildFlow",
+          "kind": "fn",
+          "startLine": 126,
+          "endLine": 163,
+          "tokens": 402
+        },
+        {
+          "name": "card",
+          "kind": "fn",
+          "startLine": 165,
+          "endLine": 165,
+          "tokens": 11
+        },
+        {
+          "name": "content",
+          "kind": "fn",
+          "startLine": 166,
+          "endLine": 166,
+          "tokens": 17
+        },
+        {
+          "name": "paintState",
+          "kind": "fn",
+          "startLine": 168,
+          "endLine": 177,
+          "tokens": 82
+        },
+        {
+          "name": "paintLinks",
+          "kind": "fn",
+          "startLine": 179,
+          "endLine": 190,
+          "tokens": 120
+        },
+        {
+          "name": "tickTimers",
+          "kind": "fn",
+          "startLine": 192,
+          "endLine": 200,
+          "tokens": 77
+        },
+        {
+          "name": "maybeScroll",
+          "kind": "fn",
+          "startLine": 203,
+          "endLine": 206,
+          "tokens": 42
+        },
+        {
+          "name": "vmCard",
+          "kind": "fn",
+          "startLine": 213,
+          "endLine": 235,
+          "tokens": 285
+        },
+        {
+          "name": "logLine",
+          "kind": "fn",
+          "startLine": 484,
+          "endLine": 486,
+          "tokens": 37
+        },
+        {
+          "name": "repaint",
+          "kind": "fn",
+          "startLine": 488,
+          "endLine": 495,
+          "tokens": 74
+        },
+        {
+          "name": "handle",
+          "kind": "fn",
+          "startLine": 499,
+          "endLine": 560,
+          "tokens": 599
+        },
+        {
+          "name": "finish",
+          "kind": "fn",
+          "startLine": 562,
+          "endLine": 581,
+          "tokens": 249
+        },
+        {
+          "name": "attach",
+          "kind": "fn",
+          "startLine": 583,
+          "endLine": 598,
+          "tokens": 158
+        },
+        {
+          "name": "readForm",
+          "kind": "fn",
+          "startLine": 604,
+          "endLine": 614,
+          "tokens": 129
+        },
+        {
+          "name": "fillForm",
+          "kind": "fn",
+          "startLine": 616,
+          "endLine": 625,
+          "tokens": 100
+        },
+        {
+          "name": "post",
+          "kind": "fn",
+          "startLine": 627,
+          "endLine": 635,
+          "tokens": 104
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "const $ = (id) => document.getElementById(id);\nfunction el(tag, cls, ...kids) {\nfunction facts(pairs) {\nfunction chips(list, cls) {\nfunction secretTag(name, sealed, presence) {\nfunction ips(list) {\nfunction section(title, ...kids) {\nconst ts = (s) => (s ? new Date(s).getTime() : NaN);\nfunction clock(s) {\nfunction dur(ms) {\nfunction epoch(n) {\nfunction quoteArgs(args) {\nfunction safeLink(url) {\nfunction freshModel() {\nfunction buildFlow() {\nconst card = (id) => $(`stage-${id}`);\nconst content = (id) => card(id).querySelector('.content');\nfunction paintState(id) {\nfunction paintLinks() {\nfunction tickTimers() {\nfunction maybeScroll(id) {\nfunction vmCard(v, kind, secrets) {\nfunction logLine(l) {\nfunction repaint(id) {\nfunction handle(e) {\nfunction finish(e) {\nfunction attach(id) {\nfunction readForm() {\nfunction fillForm(s) {\nasync function post(path, body) {",
+      "importance": 0.1354
+    },
+    "assets/index.html": {
+      "description": "Low Tide",
+      "tokens": 1008,
+      "hash": "2543f8e6b1e2673e",
+      "size": 3780,
+      "mtimeMs": 1795152333179.9036,
+      "updatedAt": "2026-11-20T05:27:18.715Z",
+      "source": "scan",
+      "importance": 0.1354
+    },
+    "Cargo.toml": {
+      "description": "Rust package manifest",
+      "tokens": 612,
+      "hash": "2960c39b17928cad",
+      "size": 2141,
+      "mtimeMs": 1795152344658.0437,
+      "updatedAt": "2026-11-20T05:27:18.715Z",
+      "source": "scan",
+      "importance": 0.1354
+    },
+    "CLAUDE.md": {
+      "description": "OpenWolf",
+      "tokens": 99,
+      "hash": "074d6b42b583729a",
+      "size": 395,
+      "mtimeMs": 1795152438685.8357,
+      "updatedAt": "2026-11-20T05:27:18.715Z",
+      "source": "scan",
+      "importance": 0.1354
+    },
+    "LICENSE": {
+      "description": "Project license",
+      "tokens": 2870,
+      "hash": "43ee1f45b02a84f6",
+      "size": 10760,
+      "mtimeMs": 1795152308369.5042,
+      "updatedAt": "2026-11-20T05:27:18.715Z",
+      "source": "scan",
+      "importance": 0.1354
+    },
+    "README.md": {
+      "description": "Project documentation",
+      "tokens": 1230,
+      "hash": "6f87ce5094a883c8",
+      "size": 4924,
+      "mtimeMs": 1795152344658.5276,
+      "updatedAt": "2026-11-20T05:27:18.715Z",
+      "source": "scan",
+      "importance": 0.1354
+    },
+    "src/demo.rs": {
+      "description": "`--demo`: a scripted run through the same event stream and the same pure functions",
+      "tokens": 3636,
+      "hash": "7eab2009df6a83ab",
+      "size": 12727,
+      "mtimeMs": 1795152333180.8032,
+      "updatedAt": "2026-11-20T05:27:18.716Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "now",
+          "kind": "fn",
+          "startLine": 22,
+          "endLine": 24,
+          "tokens": 18
+        },
+        {
+          "name": "now_plus",
+          "kind": "fn",
+          "startLine": 26,
+          "endLine": 28,
+          "tokens": 34
+        },
+        {
+          "name": "pause",
+          "kind": "fn",
+          "startLine": 30,
+          "endLine": 32,
+          "tokens": 24
+        },
+        {
+          "name": "World",
+          "kind": "class",
+          "startLine": 35,
+          "endLine": 38,
+          "tokens": 20
+        },
+        {
+          "name": "World",
+          "kind": "section",
+          "startLine": 40,
+          "endLine": 96,
+          "tokens": 677
+        },
+        {
+          "name": "World.new",
+          "kind": "method",
+          "startLine": 41,
+          "endLine": 56,
+          "tokens": 240
+        },
+        {
+          "name": "World.custody",
+          "kind": "method",
+          "startLine": 58,
+          "endLine": 95,
+          "tokens": 433
+        },
+        {
+          "name": "session_secret",
+          "kind": "fn",
+          "startLine": 98,
+          "endLine": 102,
+          "tokens": 75
+        },
+        {
+          "name": "delegation_secret",
+          "kind": "fn",
+          "startLine": 104,
+          "endLine": 108,
+          "tokens": 89
+        },
+        {
+          "name": "segment_secret",
+          "kind": "fn",
+          "startLine": 110,
+          "endLine": 115,
+          "tokens": 94
+        },
+        {
+          "name": "push",
+          "kind": "fn",
+          "startLine": 118,
+          "endLine": 126,
+          "tokens": 74
+        },
+        {
+          "name": "run",
+          "kind": "fn",
+          "startLine": 129,
+          "endLine": 312,
+          "tokens": 2250
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "fn now() -> String {\nfn now_plus(secs: i64) -> String {\nasync fn pause(ms: u64) {\nstruct World {\nimpl World {\n    fn new() -> Self {\n    fn custody(\nfn session_secret(state: &str, created: &str) -> Value {\nfn delegation_secret(created: &str) -> Value {\nfn segment_secret() -> Value {\nfn push(r: &Run, obj: &Value, prev: &mut BTreeMap<String, String>) {\npub async fn run(r: Arc<Run>, workload: String) {",
+      "imports": [
+        "src/engine.rs",
+        "src/secrets.rs",
+        "src/util.rs"
+      ],
+      "importance": 0.1498
+    },
+    "src/engine.rs": {
+      "description": "One run of the pipeline: the workload, the login, the session it leaves, the identity in",
+      "tokens": 11798,
+      "hash": "8d36ff7f9b9a08fb",
+      "size": 41293,
+      "mtimeMs": 1795152333181.309,
+      "updatedAt": "2026-11-20T05:27:18.716Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "Step",
+          "kind": "class",
+          "startLine": 38,
+          "endLine": 45,
+          "tokens": 23
+        },
+        {
+          "name": "Step",
+          "kind": "section",
+          "startLine": 47,
+          "endLine": 73,
+          "tokens": 184
+        },
+        {
+          "name": "Step.title",
+          "kind": "method",
+          "startLine": 58,
+          "endLine": 67,
+          "tokens": 95
+        },
+        {
+          "name": "Step.index",
+          "kind": "method",
+          "startLine": 70,
+          "endLine": 72,
+          "tokens": 30
+        },
+        {
+          "name": "State",
+          "kind": "class",
+          "startLine": 78,
+          "endLine": 84,
+          "tokens": 23
+        },
+        {
+          "name": "Body",
+          "kind": "class",
+          "startLine": 89,
+          "endLine": 107,
+          "tokens": 150
+        },
+        {
+          "name": "Event",
+          "kind": "class",
+          "startLine": 110,
+          "endLine": 116,
+          "tokens": 35
+        },
+        {
+          "name": "Settings",
+          "kind": "class",
+          "startLine": 123,
+          "endLine": 142,
+          "tokens": 142
+        },
+        {
+          "name": "KubeTarget",
+          "kind": "class",
+          "startLine": 146,
+          "endLine": 152,
+          "tokens": 78
+        },
+        {
+          "name": "Tracker",
+          "kind": "class",
+          "startLine": 156,
+          "endLine": 162,
+          "tokens": 42
+        },
+        {
+          "name": "Custody",
+          "kind": "class",
+          "startLine": 165,
+          "endLine": 176,
+          "tokens": 82
+        },
+        {
+          "name": "Claimed",
+          "kind": "class",
+          "startLine": 179,
+          "endLine": 184,
+          "tokens": 29
+        },
+        {
+          "name": "Run",
+          "kind": "class",
+          "startLine": 186,
+          "endLine": 196,
+          "tokens": 90
+        },
+        {
+          "name": "now",
+          "kind": "fn",
+          "startLine": 198,
+          "endLine": 200,
+          "tokens": 18
+        },
+        {
+          "name": "lock",
+          "kind": "fn",
+          "startLine": 202,
+          "endLine": 204,
+          "tokens": 36
+        },
+        {
+          "name": "Run",
+          "kind": "section",
+          "startLine": 206,
+          "endLine": 1064,
+          "tokens": 9572
+        },
+        {
+          "name": "Run.new",
+          "kind": "method",
+          "startLine": 208,
+          "endLine": 222,
+          "tokens": 158
+        },
+        {
+          "name": "Run.finished",
+          "kind": "method",
+          "startLine": 224,
+          "endLine": 226,
+          "tokens": 25
+        },
+        {
+          "name": "Run.cancel",
+          "kind": "method",
+          "startLine": 228,
+          "endLine": 230,
+          "tokens": 18
+        },
+        {
+          "name": "Run.since",
+          "kind": "method",
+          "startLine": 233,
+          "endLine": 241,
+          "tokens": 87
+        },
+        {
+          "name": "Run.emit",
+          "kind": "method",
+          "startLine": 243,
+          "endLine": 254,
+          "tokens": 90
+        },
+        {
+          "name": "Run.state",
+          "kind": "method",
+          "startLine": 256,
+          "endLine": 262,
+          "tokens": 81
+        },
+        {
+          "name": "Run.active",
+          "kind": "method",
+          "startLine": 264,
+          "endLine": 266,
+          "tokens": 28
+        },
+        {
+          "name": "Run.done",
+          "kind": "method",
+          "startLine": 268,
+          "endLine": 270,
+          "tokens": 38
+        },
+        {
+          "name": "Run.data",
+          "kind": "method",
+          "startLine": 272,
+          "endLine": 274,
+          "tokens": 31
+        },
+        {
+          "name": "Run.line",
+          "kind": "method",
+          "startLine": 276,
+          "endLine": 278,
+          "tokens": 47
+        },
+        {
+          "name": "Run.note",
+          "kind": "method",
+          "startLine": 280,
+          "endLine": 282,
+          "tokens": 36
+        },
+        {
+          "name": "Run.execute",
+          "kind": "method",
+          "startLine": 285,
+          "endLine": 316,
+          "tokens": 387
+        },
+        {
+          "name": "Run.finish",
+          "kind": "method",
+          "startLine": 319,
+          "endLine": 323,
+          "tokens": 59
+        },
+        {
+          "name": "Run.cancelled",
+          "kind": "method",
+          "startLine": 326,
+          "endLine": 328,
+          "tokens": 25
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "pub enum Step {\nimpl Step {\n    pub fn title(self) -> &'static str {\n    pub fn index(self) -> usize {\npub enum State {\npub enum Body {\npub struct Event {\npub struct Settings {\npub struct KubeTarget {\nstruct Tracker {\nstruct Custody {\nstruct Claimed {\npub struct Run {\nfn now() -> String {\nfn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {\nimpl Run {\n    pub fn new() -> Arc<Self> {\n    pub fn finished(&self) -> bool {\n    pub fn cancel(&self) {\n    pub fn since(&self, from: usize) -> (Vec<Event>, bool, watch::Receiver<u64>) {\n    pub(crate) fn emit(&self, step: Step, body: Body) {\n    pub(crate) fn state(&self, step: Step, state: State, note: Option<String>) {\n    pub(crate) fn active(&self, step: Step) {\n    pub(crate) fn done(&self, step: Step, note: impl Into<String>) {\n    pub(crate) fn data(&self, step: Step, data: Value) {\n    pub(crate) fn line(&self, step: Step, stream: &'static str, text: String, ts: Option<String>) {\n    pub(crate) fn note(&self, step: Step, text: impl Into<String>) {\n    pub async fn execute(self: Arc<Self>, s: Settings, kube: KubeTarget) {\n    pub(crate) fn finish(&self, ok: bool, note: String) {\n    pub(crate) fn cancelled(&self) -> bool {",
+      "imports": [
+        "src/util.rs"
+      ],
+      "importance": 0.3833
+    },
+    "src/kubeinfo.rs": {
+      "description": "What the Kubernetes API says around the sandbox: the egress gateway VMs, the sandbox's own",
+      "tokens": 2306,
+      "hash": "869a0a4640af8bff",
+      "size": 8071,
+      "mtimeMs": 1795152333181.507,
+      "updatedAt": "2026-11-20T05:27:18.716Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "GatewayQuery",
+          "kind": "class",
+          "startLine": 16,
+          "endLine": 23,
+          "tokens": 98
+        },
+        {
+          "name": "vm_resource",
+          "kind": "fn",
+          "startLine": 25,
+          "endLine": 30,
+          "tokens": 53
+        },
+        {
+          "name": "vm_summary",
+          "kind": "fn",
+          "startLine": 34,
+          "endLine": 80,
+          "tokens": 521
+        },
+        {
+          "name": "gateways",
+          "kind": "fn",
+          "startLine": 86,
+          "endLine": 121,
+          "tokens": 326
+        },
+        {
+          "name": "vm",
+          "kind": "fn",
+          "startLine": 124,
+          "endLine": 128,
+          "tokens": 82
+        },
+        {
+          "name": "claim_secrets",
+          "kind": "fn",
+          "startLine": 137,
+          "endLine": 180,
+          "tokens": 432
+        },
+        {
+          "name": "tests",
+          "kind": "section",
+          "startLine": 183,
+          "endLine": 216,
+          "tokens": 406
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "pub struct GatewayQuery {\nfn vm_resource() -> ApiResource {\npub fn vm_summary(obj: &Value) -> Value {\npub async fn gateways(client: kube::Client, q: &GatewayQuery) -> anyhow::Result<Vec<Value>> {\npub async fn vm(client: kube::Client, ns: &str, name: &str) -> Option<Value> {\npub async fn claim_secrets(\nmod tests {",
+      "imports": [
+        "src/util.rs"
+      ],
+      "importance": 0.1498
+    },
+    "src/main.rs": {
+      "description": "Low Tide: walk one workload through mediatore and watch each stage happen, in a",
+      "tokens": 2073,
+      "hash": "3217efccb97d4adb",
+      "size": 7254,
+      "mtimeMs": 1795152333181.7078,
+      "updatedAt": "2026-11-20T05:27:18.716Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "demo",
+          "kind": "section",
+          "startLine": 9,
+          "endLine": 9,
+          "tokens": 3
+        },
+        {
+          "name": "engine",
+          "kind": "section",
+          "startLine": 10,
+          "endLine": 10,
+          "tokens": 4
+        },
+        {
+          "name": "kubeinfo",
+          "kind": "section",
+          "startLine": 11,
+          "endLine": 11,
+          "tokens": 4
+        },
+        {
+          "name": "phases",
+          "kind": "section",
+          "startLine": 12,
+          "endLine": 12,
+          "tokens": 4
+        },
+        {
+          "name": "secrets",
+          "kind": "section",
+          "startLine": 13,
+          "endLine": 13,
+          "tokens": 4
+        },
+        {
+          "name": "tui",
+          "kind": "section",
+          "startLine": 14,
+          "endLine": 14,
+          "tokens": 3
+        },
+        {
+          "name": "util",
+          "kind": "section",
+          "startLine": 15,
+          "endLine": 15,
+          "tokens": 3
+        },
+        {
+          "name": "web",
+          "kind": "section",
+          "startLine": 16,
+          "endLine": 16,
+          "tokens": 3
+        },
+        {
+          "name": "Cli",
+          "kind": "class",
+          "startLine": 28,
+          "endLine": 31,
+          "tokens": 16
+        },
+        {
+          "name": "Cmd",
+          "kind": "class",
+          "startLine": 34,
+          "endLine": 54,
+          "tokens": 186
+        },
+        {
+          "name": "Common",
+          "kind": "class",
+          "startLine": 59,
+          "endLine": 143,
+          "tokens": 958
+        },
+        {
+          "name": "Common",
+          "kind": "section",
+          "startLine": 145,
+          "endLine": 181,
+          "tokens": 394
+        },
+        {
+          "name": "Common.settings",
+          "kind": "method",
+          "startLine": 146,
+          "endLine": 167,
+          "tokens": 244
+        },
+        {
+          "name": "Common.kube",
+          "kind": "method",
+          "startLine": 169,
+          "endLine": 180,
+          "tokens": 145
+        },
+        {
+          "name": "main",
+          "kind": "fn",
+          "startLine": 184,
+          "endLine": 210,
+          "tokens": 204
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "mod demo;\nmod engine;\nmod kubeinfo;\nmod phases;\nmod secrets;\nmod tui;\nmod util;\nmod web;\nstruct Cli {\nenum Cmd {\nstruct Common {\nimpl Common {\n    fn settings(&self, workload: String) -> engine::Settings {\n    fn kube(&self) -> engine::KubeTarget {\nasync fn main() -> anyhow::Result<()> {",
+      "imports": [
+        "src/demo.rs",
+        "src/engine.rs",
+        "src/kubeinfo.rs",
+        "src/phases.rs",
+        "src/secrets.rs",
+        "src/tui.rs",
+        "src/util.rs",
+        "src/web.rs"
+      ],
+      "importance": 0.1354
+    },
+    "src/phases.rs": {
+      "description": "The run's sub-steps, in the guest's own order (`mediatore-guest` `guest::run` and",
+      "tokens": 3380,
+      "hash": "74d6a86b095c0f52",
+      "size": 11833,
+      "mtimeMs": 1795152333181.9307,
+      "updatedAt": "2026-11-20T05:27:18.717Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "Phase",
+          "kind": "class",
+          "startLine": 23,
+          "endLine": 33,
+          "tokens": 105
+        },
+        {
+          "name": "evidence",
+          "kind": "fn",
+          "startLine": 40,
+          "endLine": 70,
+          "tokens": 260
+        },
+        {
+          "name": "phases",
+          "kind": "fn",
+          "startLine": 73,
+          "endLine": 228,
+          "tokens": 1518
+        },
+        {
+          "name": "tests",
+          "kind": "section",
+          "startLine": 231,
+          "endLine": 325,
+          "tokens": 1114
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "pub struct Phase {\npub fn evidence(obj: &Value) -> Vec<&'static str> {\npub fn phases(\nmod tests {",
+      "imports": [
+        "src/util.rs"
+      ],
+      "importance": 0.1498
+    },
+    "src/secrets.rs": {
+      "description": "Where each secret of one claim is, from what the UI can see: the session file's shape",
+      "tokens": 4757,
+      "hash": "0b0276bc6da60be3",
+      "size": 16649,
+      "mtimeMs": 1795152333182.233,
+      "updatedAt": "2026-11-20T05:27:18.717Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "Place",
+          "kind": "class",
+          "startLine": 23,
+          "endLine": 34,
+          "tokens": 74
+        },
+        {
+          "name": "Presence",
+          "kind": "class",
+          "startLine": 39,
+          "endLine": 48,
+          "tokens": 80
+        },
+        {
+          "name": "Item",
+          "kind": "class",
+          "startLine": 51,
+          "endLine": 63,
+          "tokens": 112
+        },
+        {
+          "name": "Facts",
+          "kind": "class",
+          "startLine": 68,
+          "endLine": 87,
+          "tokens": 213
+        },
+        {
+          "name": "label",
+          "kind": "fn",
+          "startLine": 89,
+          "endLine": 94,
+          "tokens": 47
+        },
+        {
+          "name": "map",
+          "kind": "fn",
+          "startLine": 98,
+          "endLine": 368,
+          "tokens": 2411
+        },
+        {
+          "name": "tests",
+          "kind": "section",
+          "startLine": 371,
+          "endLine": 495,
+          "tokens": 1406
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "pub enum Place {\npub enum Presence {\npub struct Item {\npub struct Facts<'a> {\nfn label<'a>(s: &'a Value, k: &str) -> &'a str {\npub fn map(f: &Facts) -> Vec<Item> {\nmod tests {",
+      "imports": [
+        "src/util.rs"
+      ],
+      "importance": 0.1923
+    },
+    "src/tui.rs": {
+      "description": "The terminal front end: the stages as a column of boxes, joined by connectors that fill in",
+      "tokens": 8644,
+      "hash": "f4923d37ba6cc910",
+      "size": 30316,
+      "mtimeMs": 1795152333182.6028,
+      "updatedAt": "2026-11-20T05:27:18.717Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "run",
+          "kind": "fn",
+          "startLine": 22,
+          "endLine": 31,
+          "tokens": 108
+        },
+        {
+          "name": "StageView",
+          "kind": "class",
+          "startLine": 35,
+          "endLine": 44,
+          "tokens": 103
+        },
+        {
+          "name": "StageView",
+          "kind": "section",
+          "startLine": 46,
+          "endLine": 54,
+          "tokens": 71
+        },
+        {
+          "name": "StageView.fact",
+          "kind": "method",
+          "startLine": 47,
+          "endLine": 53,
+          "tokens": 65
+        },
+        {
+          "name": "Ui",
+          "kind": "class",
+          "startLine": 56,
+          "endLine": 72,
+          "tokens": 112
+        },
+        {
+          "name": "text_of",
+          "kind": "fn",
+          "startLine": 74,
+          "endLine": 81,
+          "tokens": 72
+        },
+        {
+          "name": "Ui",
+          "kind": "section",
+          "startLine": 83,
+          "endLine": 784,
+          "tokens": 7927
+        },
+        {
+          "name": "Ui.new",
+          "kind": "method",
+          "startLine": 84,
+          "endLine": 102,
+          "tokens": 160
+        },
+        {
+          "name": "Ui.set_message",
+          "kind": "method",
+          "startLine": 104,
+          "endLine": 109,
+          "tokens": 55
+        },
+        {
+          "name": "Ui.start",
+          "kind": "method",
+          "startLine": 111,
+          "endLine": 135,
+          "tokens": 232
+        },
+        {
+          "name": "Ui.pull",
+          "kind": "method",
+          "startLine": 137,
+          "endLine": 144,
+          "tokens": 67
+        },
+        {
+          "name": "Ui.apply",
+          "kind": "method",
+          "startLine": 146,
+          "endLine": 174,
+          "tokens": 293
+        },
+        {
+          "name": "Ui.absorb",
+          "kind": "method",
+          "startLine": 177,
+          "endLine": 349,
+          "tokens": 2036
+        },
+        {
+          "name": "Ui.state_of",
+          "kind": "method",
+          "startLine": 351,
+          "endLine": 356,
+          "tokens": 47
+        },
+        {
+          "name": "Ui.main_loop",
+          "kind": "method",
+          "startLine": 358,
+          "endLine": 440,
+          "tokens": 1018
+        },
+        {
+          "name": "Ui.draw",
+          "kind": "method",
+          "startLine": 442,
+          "endLine": 455,
+          "tokens": 144
+        },
+        {
+          "name": "Ui.draw_input",
+          "kind": "method",
+          "startLine": 457,
+          "endLine": 478,
+          "tokens": 239
+        },
+        {
+          "name": "Ui.color",
+          "kind": "method",
+          "startLine": 480,
+          "endLine": 488,
+          "tokens": 84
+        },
+        {
+          "name": "Ui.icon",
+          "kind": "method",
+          "startLine": 490,
+          "endLine": 499,
+          "tokens": 106
+        },
+        {
+          "name": "Ui.duration",
+          "kind": "method",
+          "startLine": 501,
+          "endLine": 518,
+          "tokens": 168
+        },
+        {
+          "name": "Ui.draw_pipeline",
+          "kind": "method",
+          "startLine": 520,
+          "endLine": 583,
+          "tokens": 764
+        },
+        {
+          "name": "Ui.draw_link",
+          "kind": "method",
+          "startLine": 587,
+          "endLine": 615,
+          "tokens": 382
+        },
+        {
+          "name": "Ui.draw_detail",
+          "kind": "method",
+          "startLine": 617,
+          "endLine": 753,
+          "tokens": 1711
+        },
+        {
+          "name": "Ui.draw_footer",
+          "kind": "method",
+          "startLine": 755,
+          "endLine": 783,
+          "tokens": 338
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "pub async fn run(settings: Settings, kube: KubeTarget, demo: bool) -> anyhow::Result<()> {\nstruct StageView {\nimpl StageView {\n    fn fact(&mut self, k: &str, v: String) {\nstruct Ui {\nfn text_of(v: &Value) -> String {\nimpl Ui {\n    fn new(settings: Settings, kube: KubeTarget, rt: tokio::runtime::Handle, demo: bool) -> Self {\n    fn set_message(&self, m: impl Into<String>) {\n    fn start(&mut self) {\n    fn pull(&mut self) {\n    fn apply(&mut self, e: Event) {\n    fn absorb(st: &mut StageView, step: Step, data: &Value, at: Option<jiff::Timestamp>) {\n    fn state_of(&self, s: Step) -> State {\n    fn main_loop(mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {\n    fn draw(&self, f: &mut ratatui::Frame) {\n    fn draw_input(&self, f: &mut ratatui::Frame, area: Rect) {\n    fn color(state: State) -> Color {\n    fn icon(&self, state: State) -> &'static str {\n    fn duration(&self, s: Step) -> String {\n    fn draw_pipeline(&self, f: &mut ratatui::Frame, area: Rect) {\n    fn draw_link(&self, f: &mut ratatui::Frame, area: Rect, from: Step, to: Step, tick: u128) {\n    fn draw_detail(&self, f: &mut ratatui::Frame, area: Rect) {\n    fn draw_footer(&self, f: &mut ratatui::Frame, area: Rect) {",
+      "imports": [
+        "src/engine.rs",
+        "src/util.rs"
+      ],
+      "importance": 0.1498
+    },
+    "src/util.rs": {
+      "description": "The pure pieces: the workload text field, the ID token's claims for display, and the",
+      "tokens": 3595,
+      "hash": "a0f90c1c54cf6a75",
+      "size": 12580,
+      "mtimeMs": 1795152333182.8403,
+      "updatedAt": "2026-11-20T05:27:18.717Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "split_workload",
+          "kind": "fn",
+          "startLine": 20,
+          "endLine": 62,
+          "tokens": 404
+        },
+        {
+          "name": "Identity",
+          "kind": "class",
+          "startLine": 67,
+          "endLine": 84,
+          "tokens": 192
+        },
+        {
+          "name": "fingerprint",
+          "kind": "fn",
+          "startLine": 88,
+          "endLine": 90,
+          "tokens": 29
+        },
+        {
+          "name": "identity_of",
+          "kind": "fn",
+          "startLine": 97,
+          "endLine": 140,
+          "tokens": 426
+        },
+        {
+          "name": "flatten",
+          "kind": "fn",
+          "startLine": 152,
+          "endLine": 179,
+          "tokens": 241
+        },
+        {
+          "name": "Change",
+          "kind": "class",
+          "startLine": 183,
+          "endLine": 187,
+          "tokens": 25
+        },
+        {
+          "name": "diff",
+          "kind": "fn",
+          "startLine": 191,
+          "endLine": 206,
+          "tokens": 155
+        },
+        {
+          "name": "Exit",
+          "kind": "class",
+          "startLine": 211,
+          "endLine": 216,
+          "tokens": 36
+        },
+        {
+          "name": "exit_of",
+          "kind": "fn",
+          "startLine": 220,
+          "endLine": 232,
+          "tokens": 132
+        },
+        {
+          "name": "str_at",
+          "kind": "fn",
+          "startLine": 236,
+          "endLine": 240,
+          "tokens": 42
+        },
+        {
+          "name": "tests",
+          "kind": "section",
+          "startLine": 243,
+          "endLine": 374,
+          "tokens": 1315
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "pub fn split_workload(s: &str) -> anyhow::Result<(String, Vec<String>)> {\npub struct Identity {\npub fn fingerprint(token: &str) -> String {\npub fn identity_of(token: &str) -> anyhow::Result<Identity> {\npub fn flatten(obj: &Value) -> BTreeMap<String, String> {\npub struct Change {\npub fn diff(a: &BTreeMap<String, String>, b: &BTreeMap<String, String>) -> Vec<Change> {\npub struct Exit {\npub fn exit_of(obj: &Value) -> Option<Exit> {\npub fn str_at<'a>(v: &'a Value, pointer: &str) -> &'a str {\nmod tests {",
+      "importance": 1
+    },
+    "src/web.rs": {
+      "description": "The web front end: one page, served on loopback, fed by server-sent events.",
+      "tokens": 3029,
+      "hash": "e3d59bf5ebad3a07",
+      "size": 10600,
+      "mtimeMs": 1795152333183.0894,
+      "updatedAt": "2026-11-20T05:27:18.717Z",
+      "source": "scan",
+      "symbols": [
+        {
+          "name": "App",
+          "kind": "class",
+          "startLine": 31,
+          "endLine": 37,
+          "tokens": 38
+        },
+        {
+          "name": "serve",
+          "kind": "fn",
+          "startLine": 41,
+          "endLine": 104,
+          "tokens": 572
+        },
+        {
+          "name": "lock",
+          "kind": "fn",
+          "startLine": 106,
+          "endLine": 108,
+          "tokens": 36
+        },
+        {
+          "name": "asset",
+          "kind": "fn",
+          "startLine": 110,
+          "endLine": 119,
+          "tokens": 64
+        },
+        {
+          "name": "guard",
+          "kind": "fn",
+          "startLine": 122,
+          "endLine": 154,
+          "tokens": 324
+        },
+        {
+          "name": "has_cookie",
+          "kind": "fn",
+          "startLine": 156,
+          "endLine": 171,
+          "tokens": 142
+        },
+        {
+          "name": "require_cookie",
+          "kind": "fn",
+          "startLine": 173,
+          "endLine": 191,
+          "tokens": 186
+        },
+        {
+          "name": "IndexQuery",
+          "kind": "class",
+          "startLine": 194,
+          "endLine": 196,
+          "tokens": 13
+        },
+        {
+          "name": "index",
+          "kind": "fn",
+          "startLine": 198,
+          "endLine": 227,
+          "tokens": 271
+        },
+        {
+          "name": "config",
+          "kind": "fn",
+          "startLine": 229,
+          "endLine": 245,
+          "tokens": 158
+        },
+        {
+          "name": "err",
+          "kind": "fn",
+          "startLine": 247,
+          "endLine": 249,
+          "tokens": 37
+        },
+        {
+          "name": "start",
+          "kind": "fn",
+          "startLine": 251,
+          "endLine": 272,
+          "tokens": 213
+        },
+        {
+          "name": "cancel",
+          "kind": "fn",
+          "startLine": 274,
+          "endLine": 279,
+          "tokens": 46
+        },
+        {
+          "name": "delete",
+          "kind": "fn",
+          "startLine": 281,
+          "endLine": 290,
+          "tokens": 102
+        },
+        {
+          "name": "EventsQuery",
+          "kind": "class",
+          "startLine": 293,
+          "endLine": 296,
+          "tokens": 21
+        },
+        {
+          "name": "events",
+          "kind": "fn",
+          "startLine": 300,
+          "endLine": 337,
+          "tokens": 413
+        }
+      ],
+      "symbolSource": "ts",
+      "skeleton": "struct App {\npub async fn serve(\nfn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {\nfn asset(ct: &'static str, body: &'static str) -> Response {\nasync fn guard(req: Request, next: Next) -> Response {\nfn has_cookie(app: &App, headers: &HeaderMap) -> bool {\nasync fn require_cookie(State(app): State<Shared>, req: Request, next: Next) -> Response {\nstruct IndexQuery {\nasync fn index(\nasync fn config(State(app): State<Shared>) -> Response {\nfn err(code: StatusCode, msg: impl Into<String>) -> Response {\nasync fn start(State(app): State<Shared>, Json(s): Json<Settings>) -> Response {\nasync fn cancel(State(app): State<Shared>) -> StatusCode {\nasync fn delete(State(app): State<Shared>) -> Response {\nstruct EventsQuery {\nasync fn events(",
+      "imports": [
+        "src/engine.rs"
+      ],
+      "importance": 0.1498
+    }
+  },
+  "preamble": [
+    "> Project structure index. Auto-maintained by OpenWolf hooks and daemon.",
+    "> Run `openwolf scan` to generate, or wait for the first Claude Code session.",
+    "> Status: Pending initial scan"
+  ]
+}

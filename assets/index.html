@@ -1,0 +1,74 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Erick Bourgeois, Low Tide -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Low Tide</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Low Tide <span class="dim">for mediatore</span></div>
+    <div class="run-status" id="run-status" hidden></div>
+    <div class="top-actions">
+      <button id="follow" class="ghost on" type="button" title="Scroll to each stage as it starts">Follow</button>
+      <button id="cancel" class="ghost" type="button" hidden>Cancel</button>
+      <button id="delete" class="ghost danger" type="button" hidden>Delete sandbox</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" id="hero">
+      <label for="workload" class="hero-label">Workload</label>
+      <div class="hero-row">
+        <input id="workload" class="workload" type="text" spellcheck="false" autocomplete="off"
+               placeholder="IMAGE [ARG...]">
+        <button id="run" class="primary" type="button">Run</button>
+      </div>
+      <div class="hero-error" id="hero-error" role="alert"></div>
+
+      <details class="settings" id="settings">
+        <summary>Connection and claim settings</summary>
+        <div class="grid">
+          <label>Issuer<input data-k="issuer" type="text" placeholder="https://dex.example.com"></label>
+          <label>Client id<input data-k="clientId" type="text"></label>
+          <label>mediatore URL<input data-k="url" type="text" placeholder="https://mediatore.example.com"></label>
+          <label>CA file (PEM)<input data-k="caFile" type="text" placeholder="optional"></label>
+          <label>Namespace<input data-k="namespace" type="text" placeholder="broker default"></label>
+          <label>Pool<input data-k="pool" type="text" placeholder="any pool"></label>
+          <label>Pool selector<input data-k="poolSelector" data-list type="text" placeholder="key=value, key=value"></label>
+          <label>Strategy
+            <select data-k="strategy">
+              <option value="">banlieue default</option>
+              <option value="longest-ready">longest-ready</option>
+              <option value="most-available">most-available</option>
+              <option value="spread">spread</option>
+            </select>
+          </label>
+          <label>TTL (s)<input data-k="ttl" type="number" min="60" step="60"></label>
+          <label>Restart
+            <select data-k="restart">
+              <option value="never">never</option>
+              <option value="on-failure">on-failure</option>
+              <option value="always">always</option>
+            </select>
+          </label>
+          <label>Audiences<input data-k="audiences" data-list type="text" placeholder="comma separated"></label>
+          <label>Delegate<input data-k="delegate" data-list type="text" placeholder="anthropic=claude-code"></label>
+          <label>Policy<input data-k="policy" type="text" placeholder="optional"></label>
+          <label class="check"><input data-k="logs" type="checkbox"> Capture output</label>
+          <label class="check"><input data-k="reuseSession" type="checkbox"> Reuse a fresh session</label>
+          <label class="check"><input data-k="allowPlainHttp" type="checkbox"> Plain http user API</label>
+          <label class="check"><input data-k="noBrowser" type="checkbox"> Do not open a browser for login</label>
+        </div>
+        <p class="hint" id="env-hint"></p>
+      </details>
+    </section>
+
+    <ol class="flow" id="flow" aria-live="polite"></ol>
+  </main>
+</body>
+</html>
