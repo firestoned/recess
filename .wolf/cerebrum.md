@@ -28,6 +28,8 @@ budget_tokens: 2000
 - **Description:** <!-- Copyright (c) 2026 Erick Bourgeois, Low Tide -->
 
 - [2026-11-20] The jail reaches the outside only as `$MEDIATORE_EGRESS_PROXY/<host>/<path>` for hosts in the claim's audiences (broker `audiences[].egress`, rules are path globs). No CONNECT, so HTTPS_PROXY tools fail; PyPI's absolute file URLs need an in-workload rewriting shim. Test workloads on slate with podman plus a stand-in proxy before a live claim.
+- [2026-11-20] Inside the jail: Landlock allows connect only to 3128 and no bind (no local helper servers); /tmp and /home/sandbox are 4 MB tmpfs; /work sits in the per-claim sandbox tmpfs (50% of VM RAM, shared with the unpacked image). Put HOME, TMPDIR and caches under /work.
+- [2026-11-20] The jail has no writable /dev/shm: Python multiprocessing (SemLock) fails EACCES. Reproduce the real confinement on slate with `mediatore jail-exec --writable ... --connect-port N -- argv` (binary copied from the broker image) under setpriv, not with plain podman.
 
 ## Do-Not-Repeat
 
