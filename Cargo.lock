@@ -1710,7 +1710,7 @@ dependencies = [
  "anyhow",
  "aws-lc-rs",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "futures",
  "hex",
@@ -1722,7 +1722,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "tokio",
  "tokio-util",
 ]
