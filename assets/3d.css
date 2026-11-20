@@ -1,0 +1,8 @@
+
+/* A deposit box the run has emptied: still listed, greyed and struck through. */
+.deposit .removed {
+  font: 11px var(--mono); padding: 8px; color: var(--muted); word-break: break-all;
+  border: 1px dashed var(--faint); background: transparent; cursor: default; opacity: .75;
+}
+.deposit .removed s { display: block; text-decoration-thickness: 1px; text-decoration-color: var(--muted); }
+.deposit .removed .why { display: block; margin-top: 3px; font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; }
