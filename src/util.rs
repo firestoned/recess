@@ -315,7 +315,7 @@ mod tests {
     fn an_audience_list_and_no_groups() {
         let id = identity_of(&jwt(&json!({"aud": ["a", "b"], "sub": "s"}))).unwrap();
         assert_eq!(id.audience, ["a", "b"]);
-        assert!(id.groups.is_empty());
+        assert_eq!(id.groups, Vec::<String>::new());
     }
 
     #[test]
@@ -353,7 +353,7 @@ mod tests {
                 ch("status.record.exit.code", "", "0"),
             ]
         );
-        assert!(diff(&fb, &fb).is_empty());
+        assert_eq!(diff(&fb, &fb), Vec::<Change>::new());
     }
 
     #[test]

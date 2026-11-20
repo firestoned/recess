@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use crate::engine::{Run, State, Step, gateway_ips};
 use crate::secrets::{self, Facts};
+use crate::settings::LoginSettings;
 use crate::util;
 
 const SANDBOX_UID: &str = "0b9a8c7d-0000-4000-8000-00000000550b";
@@ -114,6 +115,28 @@ fn segment_secret() -> Value {
         "created": now()})
 }
 
+/// The recent-runs list the demo shows: placeholders.
+#[must_use]
+pub fn recent() -> Vec<Value> {
+    let ago = |m: i64| (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(m)).to_string();
+    [
+        (2, "exit 0", "ok"),
+        (9, "starting: no guest report yet", "live"),
+        (14, "exit 0", "ok"),
+        (31, "exit 1", "bad"),
+        (58, "released before an exit", "idle"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (m, status, tone))| {
+        json!({"name": format!("sandbox-demo{i:02}"), "namespace": "sandboxes", "created": ago(m),
+            "image": "registry.internal:5000/library/python:3.13-slim", "args": ["python3", "-u", "-c", "print('hello world')"],
+            "phase": "Bound", "vm": format!("pool-standard-b-{i}"), "addresses": [format!("198.51.100.{}", 40 + i)],
+            "status": status, "tone": tone})
+    })
+    .collect()
+}
+
 /// Send the object's changes to the Run stage and advance its sub-steps.
 fn push(r: &Run, obj: &Value, prev: &mut BTreeMap<String, String>) {
     let flat = util::flatten(obj);
@@ -126,21 +149,24 @@ fn push(r: &Run, obj: &Value, prev: &mut BTreeMap<String, String>) {
 }
 
 #[allow(clippy::too_many_lines)]
-pub async fn run(r: Arc<Run>, workload: String) {
-    let (image, args) = util::split_workload(&workload).unwrap_or_else(|_| {
-        (
-            "docker.io/library/python:3.13-slim".into(),
-            vec!["python3".into()],
-        )
-    });
+pub async fn run(r: Arc<Run>, login: LoginSettings) {
     let world = World::new();
 
-    // 1. Mint the token.
+    // 1. `mediatore login`.
+    let login = if login.issuer.trim().is_empty() {
+        LoginSettings {
+            issuer: "https://dex.example.com".into(),
+            ..login
+        }
+    } else {
+        login
+    };
     r.active(Step::Mint);
+    r.data(Step::Mint, json!({"command": login.command()}));
     r.data(
         Step::Mint,
         json!({"login": {"issuer": "https://dex.example.com", "clientId": "mediatore",
-        "scopes": ["openid", "profile", "email", "groups", "offline_access"]}}),
+        "scopes": if login.scopes.is_empty() { mediatore_client::LoginOptions::default_scopes() } else { login.scopes.clone() }}}),
     );
     pause(500).await;
     r.data(Step::Mint, json!({"authorizeUrl":
@@ -163,8 +189,16 @@ pub async fn run(r: Arc<Run>, workload: String) {
         format!("octocat · 3 groups · token in {SESSION_PATH} (0600)"),
     );
 
-    // 2. Create the workload.
-    r.active(Step::Create);
+    // 2. Create the workload, once it is given.
+    let Ok(c) = r.await_claim().await else {
+        return;
+    };
+    let (image, args) = util::split_workload(&c.workload).unwrap_or_else(|_| {
+        (
+            "docker.io/library/python:3.13-slim".into(),
+            vec!["python3".into()],
+        )
+    });
     r.data(Step::Create, json!({"workload": {"image": image, "args": args, "restart": "never", "logs": true,
         "ttl": 3600, "namespace": "sandboxes", "pool": "", "poolSelector": ["tier=standard"], "strategy": "spread",
         "audiences": world.audiences, "policy": "default", "delegate": ["anthropic"]}}));
@@ -198,6 +232,10 @@ pub async fn run(r: Arc<Run>, workload: String) {
     world.custody(&r, None, &[], true, false, "");
     push(&r, &obj, &mut prev);
     r.note(Step::Run, "phase Pending");
+    let booting = now();
+    r.data(Step::Run, json!({"pool": {"name": "pool-standard-b", "available": 0, "claimed": 1, "provisioning": 1, "replicas": 2,
+        "warm": "0/1 warm member(s) available",
+        "members": [{"name": "pool-standard-b-4", "created": booting, "power": "PoweredOn", "guestReady": false}]}}));
     pause(900).await;
     world.custody(
         &r,
@@ -236,6 +274,10 @@ pub async fn run(r: Arc<Run>, workload: String) {
     obj["status"]["record"]["expiresAt"] = obj["status"]["expiresAt"].clone();
     push(&r, &obj, &mut prev);
     r.note(Step::Run, "phase Bound");
+    r.data(Step::Run, json!({"pool": {"name": "pool-standard-b", "available": 0, "claimed": 2, "provisioning": 1, "replicas": 2,
+        "warm": "0/1 warm member(s) available",
+        "members": [{"name": "pool-standard-b-4", "created": booting, "power": "PoweredOn", "guestReady": true},
+                    {"name": "pool-standard-b-5", "created": now(), "power": "PoweredOn", "guestReady": false}]}}));
     r.data(Step::Run, json!({"event": {"at": now(), "type": "Normal", "reason": "Bound",
         "message": format!("bound to {vm} by Spread from fd-2"), "object": "VirtualMachineClaim/octocat-7k2qd", "count": 1}}));
     world.custody(&r, Some(&obj), &sealed, false, false, vm);

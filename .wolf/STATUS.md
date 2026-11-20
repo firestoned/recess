@@ -2,67 +2,50 @@
 description: session handoff, regenerate with /handoff when a quest finishes
 budget_tokens: 1000
 ---
-# STATUS — low-tide
+# STATUS: low-tide
 
-> Single source of truth for resuming work. Read this FIRST when starting a session.
-> Update this file at the end of every work phase so the next `/clear` resumes in 1 read.
-> Last updated: 2026-11-20
-
----
+> Read this FIRST when resuming. Last updated: 2026-11-20
 
 ## ✅ Done
 
-<!-- Move items here from "🚀 Next phase" when finished. Group by area. -->
+- Low Tide: one Rust binary, `low-tide web` (axum, loopback, key-in-link cookie, Host check) and `low-tide tui` (ratatui 0.30), one engine (`src/engine.rs`) emitting step events.
+- Flow follows the CLI: 1 `mediatore login` (form with every CLI option, issuer required, live command preview; `src/settings.rs` `LoginSettings::command`/`to_options`) → run waits (`Run::await_claim`/`submit`, oneshot) → 2 `mediatore sandbox create` (`ClaimSettings`) → 3 seal → 4 run (sub-steps, `src/phases.rs`) → 5 output → 6 exit. Web: `POST /api/login`, then `POST /api/create` (409/400 when out of order or malformed).
+- Secrets map (`src/secrets.rs`): red, lock when sealed, RAM when memory-only; Secrets listed by label in the broker namespace, metadata only (`src/kubeinfo.rs`). Gateway VMs by `mediatore.io/role=gateway` with IPs.
+- `--demo` scripted run (`src/demo.rs`), placeholders only; default workload python:3.13-slim hello world + sleep.
+- CI: `.github/workflows/build.yaml` (SPDX, signed commits, fmt, clippy, test, cargo-audit, cargo-deny, dist linux-x86_64 + darwin-arm64, attach on release), `Makefile` (check/dist/demo), `deny.toml` (mediatore's allowlist, ring banned), `.github/dependabot.yml`.
+- Gate green: mac (`make check`, `make dist`) and slate (fmt, clippy 0.1.99, 21 tests, deny, `dist/low-tide-linux-x86_64`); actionlint clean.
+- Config file `~/.config/low-tide/config.env` (`src/config.rs`): CLI env names + LOW_TIDE_*; `low-tide config [init]`; MEDIATORE_SESSION honoured; `--workload`/LOW_TIDE_WORKLOAD for web and TUI.
+- Web layout: rail of stage nodes (left) + one card in focus; completed cards shrink into the rail, next pops up (queue with 1.6 s dwell), tooltips, click to pin, "Back to live". Refusals parsed (`brokerError`, `REFUSAL_HINTS`).
+- mediatore-client/proto pinned by git rev `4dfb9f1` (README has the `[patch]` recipe for a local checkout).
 
-- (nothing yet — fill in as work completes)
+## 🚀 Next quest
 
----
+**Goal:** commit this work, push, and see the first CI run green; then a live run against the core cluster.
 
-## 🚀 Next phase
+1. Commit (uncommitted: everything above since `bad4473`) with `git commit -s -S`, push to `firestoned/low-tide` main; the user runs push.
+2. CI green on GitHub (watch: `macos-latest` dist job, license-check composite on `.rs`/Makefile/workflow YAML only).
+3. Live run: `low-tide web --namespace <ns>` with `MEDIATORE_ISSUER`/`MEDIATORE_URL`, kubeconfig for the core cluster; one Dex login per claim.
 
-**Goal:** _<what we're building next, in 1 sentence>_
+Live-run note: the core pool reaches only its own registry (not Docker Hub): set LOW_TIDE_WORKLOAD to an image there.
 
-### Acceptance criteria
-1. _<concrete user-visible outcome>_
-2. _<...>_
+Acceptance: CI all green; a real claim reaches "Exit code" with output streamed; secrets map shows the session and delegation Secrets in `banlieue-system` (or reports RBAC refusal once).
 
-### Files to create / edit
-| Type | File | Content |
-|---|---|---|
-| new | `path/to/file.ts` | _what it does_ |
+Cluster findings (not Low Tide's, 2026-11-20):
+- banlieue gave a warm member to a newer claim while an older one waited (sandbox-78cf20e3 vs aa705d57): no FIFO across waiting claims.
+- mediatore: a guest whose VM was claimed the second it announced (sandbox-768f2ab7 on 6q5jv) polled the broker every ~6 s and never reported; needs the guest journal.
+- Which gateway carried a tunnel is not observable (shared authorizer identity, NAT'd peer); the graph's `seal.via` slot waits for mediatore to report it.
 
-### Closed decisions
-- _<choice + reasoning>_
+Open decisions:
+- RBAC for the user's kubeconfig to list Secret metadata in `banlieue-system` and `virtualmachines.banlieue.io`.
+- Telemetry from the guest (OTel spans keyed by claim UID) to turn the `inferred` jail step into `observed`.
 
-### Open decisions
-- _<question to ask the user before coding>_
+## Context
 
----
+- Branch `main`, one commit (`bad4473`); the rest is working tree. Repo is private.
+- slate's clippy is newer than the mac's: run `make lint` there before handing back (`rsync -az --delete --exclude target --exclude dist --exclude .wolf ./ slate:builds/low-tide/`).
+- `~/dev/mediatore-ui` is obsolete (target moved here); delete when the user agrees.
+- TUI not yet looked at on a real terminal; web verified by headless Chrome screenshots of `--demo`.
 
-## 📁 Active architecture
+## 📚 References
 
-- **Stack:** _<frameworks, libraries, runtime>_
-- **Key tables / modules:** _<list>_
-- **Patterns:** _<conventions enforced project-wide>_
-
----
-
-## ⚠️ External blockers (don't block coding)
-
-- _<env vars, secrets, external accounts, manual steps>_
-
----
-
-## 🔧 Useful commands
-
-```bash
-# add the most-used commands here so the next session has them ready
-```
-
----
-
-## 📚 References (read IF needed)
-
-- `.wolf/cerebrum.md` — User Preferences + Do-Not-Repeat + Decision Log
-- `.wolf/anatomy.md` — token-efficient file index
-- `.wolf/buglog.json` — known bugs + fixes
+- `.wolf/cerebrum.md` (preferences, Do-Not-Repeat), `.wolf/buglog.json` (4 fixes this session), `README.md`.

@@ -142,7 +142,7 @@ pub fn phases(
         ),
         (
             "attest",
-            "Guest attested, sandbox fetched",
+            "Node identity on the record",
             seen.contains_key("attest"),
             when("attest", String::new()),
             s("/status/record/nodeId"),
@@ -150,11 +150,11 @@ pub fn phases(
         ),
         (
             "build",
-            "Sandbox built",
+            "Guest fetched and built the sandbox",
             report.is_some(),
             when("build", report.map(|r| str_at(r, "/reported_at").to_owned()).unwrap_or_default()),
             report.map_or_else(
-                || "tmpfs, rootfs, image pull, nftables ruleset, egress proxy, phantom token".to_owned(),
+                || "GET /v1/me, then tmpfs, rootfs, image pull, nftables ruleset, egress proxy, phantom token".to_owned(),
                 |r| {
                     format!(
                         "image {} · ruleset {}",
@@ -227,6 +227,76 @@ pub fn phases(
     out
 }
 
+/// A step that has been under way longer than it should: what it waits for and since when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Stall {
+    pub key: &'static str,
+    pub title: &'static str,
+    /// When the step became the one under way: the previous step's time, or the run's start.
+    pub since: String,
+    pub secs: i64,
+    pub hint: &'static str,
+}
+
+/// How long each step may take before it is called stalled, and what to look at. The workload's
+/// own steps (the jail, its run, its exit) have no limit: a workload runs as long as it runs.
+fn limit(key: &str) -> Option<(i64, &'static str)> {
+    Some(match key {
+        "claim" => (
+            30,
+            "the broker has not created the VirtualMachineClaim yet: see the broker's log for the sandbox",
+        ),
+        "bind" => (
+            120,
+            "no Ready member in the pool yet: banlieue may be building one (a fresh VM takes minutes), or other claims are ahead of this one",
+        ),
+        "entry" => (
+            45,
+            "the claim is bound but its SPIRE entry is not set: see the broker's log for the claim UID",
+        ),
+        "attest" => (
+            90,
+            "the bound VM's node identity is not on the record: its guest has not registered with the broker",
+        ),
+        "build" => (
+            120,
+            "the guest has not reported: it fetches its sandbox (GET /v1/me), pulls the image, loads the nftables ruleset and starts the egress proxy. A large cold pull takes time; past a few minutes, read the guest's journal on the VM",
+        ),
+        "release" => (
+            60,
+            "the workload exited but the claim is not released yet: see the broker's log",
+        ),
+        _ => return None,
+    })
+}
+
+/// The 15 s bucket a step's stall starts in: the first time it is sent, noted once in the log.
+#[must_use]
+pub fn stall_first_bucket(key: &str) -> i64 {
+    limit(key).map_or(0, |(max, _)| max / 15)
+}
+
+/// The stall, if the step under way has run past its limit at `now`.
+#[must_use]
+pub fn stall(ps: &[Phase], started: &str, now: jiff::Timestamp) -> Option<Stall> {
+    let i = ps.iter().position(|p| p.state == "active")?;
+    let (max, hint) = limit(ps[i].key)?;
+    let since = if i == 0 {
+        started.to_owned()
+    } else {
+        ps[i - 1].at.clone()
+    };
+    let t: jiff::Timestamp = since.parse().ok()?;
+    let secs = now.duration_since(t).as_secs();
+    (secs >= max).then(|| Stall {
+        key: ps[i].key,
+        title: ps[i].title,
+        since,
+        secs,
+        hint,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +312,7 @@ mod tests {
         let ps = phases(Some(&o), &Seen::new(), None, true);
         assert_eq!(ps[0].state, "active");
         assert!(ps[1..].iter().all(|p| p.state == "pending"));
-        assert!(evidence(&o).is_empty());
+        assert_eq!(evidence(&o), Vec::<&str>::new());
     }
 
     #[test]
@@ -321,5 +391,42 @@ mod tests {
         let ps = phases(Some(&o), &seen, None, true);
         assert_eq!(ps[1].state, "failed");
         assert_eq!(ps[1].detail, "no Ready member");
+    }
+
+    #[test]
+    fn a_guest_that_never_reports_is_called_stalled_at_the_build() {
+        let o = json!({"status": {"phase": "Bound", "claimRef": {"name": "c"}, "boundAt": "2026-11-20T06:17:39Z",
+            "entrySet": true, "record": {"entryId": "e", "nodeId": "spiffe://sandbox.test/banlieue/node/ab"}}});
+        let seen: Seen = evidence(&o)
+            .into_iter()
+            .map(|k| (k, "2026-11-20T06:17:40Z".to_owned()))
+            .collect();
+        let ps = phases(Some(&o), &seen, None, false);
+        assert_eq!(ps[4].state, "active");
+        let at = |s: &str| s.parse::<jiff::Timestamp>().unwrap();
+        assert_eq!(
+            stall(&ps, "2026-11-20T06:17:07Z", at("2026-11-20T06:18:30Z")),
+            None,
+            "50 s is not a stall"
+        );
+        let st = stall(&ps, "2026-11-20T06:17:07Z", at("2026-11-20T06:21:40Z")).unwrap();
+        assert_eq!(
+            (st.key, st.secs, st.since.as_str()),
+            ("build", 240, "2026-11-20T06:17:40Z")
+        );
+        assert!(st.hint.contains("GET /v1/me"));
+    }
+
+    #[test]
+    fn a_running_workload_is_never_stalled() {
+        let o = json!({"status": {"phase": "Bound", "claimRef": {"name": "c"}, "boundAt": "t", "entrySet": true,
+            "record": {"nodeId": "n", "report": {"reported_at": "2026-11-20T06:00:00Z"}}}});
+        let seen: Seen = evidence(&o)
+            .into_iter()
+            .map(|k| (k, "2026-11-20T06:00:00Z".to_owned()))
+            .collect();
+        let ps = phases(Some(&o), &seen, None, false);
+        let late = "2026-11-20T09:00:00Z".parse().unwrap();
+        assert_eq!(stall(&ps, "2026-11-20T06:00:00Z", late), None);
     }
 }

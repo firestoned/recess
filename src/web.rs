@@ -24,15 +24,19 @@ use futures::Stream;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::engine::{KubeTarget, Run, Settings};
+use crate::engine::{KubeTarget, Run};
+use crate::settings::{ClaimSettings, LoginSettings};
 
 const COOKIE: &str = "low_tide";
 
 struct App {
     secret: String,
-    defaults: Settings,
+    login: LoginSettings,
+    claim: ClaimSettings,
     kube: KubeTarget,
     demo: bool,
+    config_note: Option<String>,
+    kube_client: tokio::sync::OnceCell<kube::Client>,
     run: Mutex<Option<Arc<Run>>>,
 }
 
@@ -40,10 +44,12 @@ type Shared = Arc<App>;
 
 pub async fn serve(
     listen: SocketAddr,
-    defaults: Settings,
+    login: LoginSettings,
+    claim: ClaimSettings,
     kube: KubeTarget,
     open: bool,
     demo: bool,
+    config_note: Option<String>,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
         listen.ip().is_loopback(),
@@ -53,9 +59,12 @@ pub async fn serve(
     aws_lc_rs::rand::fill(&mut b).map_err(|_| anyhow::anyhow!("no randomness"))?;
     let app = Arc::new(App {
         secret: hex::encode(b),
-        defaults,
+        login,
+        claim,
         kube,
         demo,
+        config_note,
+        kube_client: tokio::sync::OnceCell::new(),
         run: Mutex::new(None),
     });
     let listener = tokio::net::TcpListener::bind(listen).await?;
@@ -69,10 +78,12 @@ pub async fn serve(
 
     let api = Router::new()
         .route("/api/config", get(config))
-        .route("/api/run", post(start))
+        .route("/api/login", post(start))
+        .route("/api/create", post(create))
         .route("/api/cancel", post(cancel))
         .route("/api/delete", post(delete))
         .route("/api/events", get(events))
+        .route("/api/recent", get(recent))
         .route(
             "/app.js",
             get(|| async { asset("text/javascript", include_str!("../assets/app.js")) }),
@@ -227,19 +238,21 @@ async fn index(
 }
 
 async fn config(State(app): State<Shared>) -> Response {
-    let session = mediatore_client::Session::default_path()
+    let session = crate::engine::session_path()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     let current = lock(&app.run)
         .as_ref()
-        .map(|r| json!({"id": r.id, "finished": r.finished()}));
+        .map(|r| json!({"id": r.id, "finished": r.finished(), "waiting": r.waiting()}));
     Json(json!({
-        "defaults": app.defaults,
+        "login": app.login,
+        "claim": app.claim,
         "sessionPath": session,
         "kubeContext": app.kube.context,
         "kubeconfig": app.kube.kubeconfig,
         "run": current,
         "demo": app.demo,
+        "configFile": app.config_note,
     }))
     .into_response()
 }
@@ -248,9 +261,11 @@ fn err(code: StatusCode, msg: impl Into<String>) -> Response {
     (code, Json(json!({"error": msg.into()}))).into_response()
 }
 
-async fn start(State(app): State<Shared>, Json(s): Json<Settings>) -> Response {
-    if let Err(e) = crate::util::split_workload(&s.workload) {
-        return err(StatusCode::BAD_REQUEST, e.to_string());
+/// `mediatore login` with the form's options: a new run, which mints the token and then waits
+/// for the workload. The issuer is required; one login per claim, as the CLI.
+async fn start(State(app): State<Shared>, Json(login): Json<LoginSettings>) -> Response {
+    if !app.demo && login.issuer.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "the issuer is required");
     }
     let mut slot = lock(&app.run);
     if slot.as_ref().is_some_and(|r| !r.finished()) {
@@ -264,18 +279,37 @@ async fn start(State(app): State<Shared>, Json(s): Json<Settings>) -> Response {
     drop(slot);
     let id = run.id.clone();
     if app.demo {
-        tokio::spawn(crate::demo::run(run, s.workload));
+        tokio::spawn(crate::demo::run(run, login));
     } else {
-        tokio::spawn(run.execute(s, app.kube.clone()));
+        tokio::spawn(run.execute(login, app.kube.clone()));
     }
     (StatusCode::ACCEPTED, Json(json!({"id": id}))).into_response()
 }
 
-async fn cancel(State(app): State<Shared>) -> StatusCode {
-    if let Some(r) = lock(&app.run).as_ref() {
-        r.cancel();
+/// `mediatore sandbox create` with the form's options, handed to the run that waits for it.
+async fn create(State(app): State<Shared>, Json(c): Json<ClaimSettings>) -> Response {
+    let Some(run) = lock(&app.run).clone() else {
+        return err(StatusCode::CONFLICT, "log in first");
+    };
+    match run.submit(c, !app.demo) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, format!("{e:#}")),
     }
-    StatusCode::NO_CONTENT
+}
+
+/// Cancel the run and release its claim, so it does not wait in the pool's queue unwatched.
+async fn cancel(State(app): State<Shared>) -> Response {
+    let run = lock(&app.run).clone();
+    let Some(run) = run else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+    match run.cancel_and_release().await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err(
+            StatusCode::BAD_GATEWAY,
+            format!("cancelled, but the claim was not released: {e:#}"),
+        ),
+    }
 }
 
 async fn delete(State(app): State<Shared>) -> Response {
@@ -286,6 +320,55 @@ async fn delete(State(app): State<Shared>) -> Response {
     match run.delete_sandbox().await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+    }
+}
+
+/// Your recent sandboxes, from the Kubernetes API: the ones whose subject is the identity in
+/// the session file (or every one the kubeconfig may list, without a session), newest first.
+async fn recent(State(app): State<Shared>) -> Response {
+    if app.demo {
+        return Json(
+            json!({"items": crate::demo::recent(), "namespace": "sandboxes", "mine": true}),
+        )
+        .into_response();
+    }
+    let ns = if app.claim.namespace.is_empty() {
+        app.kube.broker_namespace.clone()
+    } else {
+        app.claim.namespace.clone()
+    };
+    let (issuer, ids) = crate::engine::session_path()
+        .ok()
+        .and_then(|p| mediatore_client::Session::load(&p).ok())
+        .and_then(|s| {
+            crate::util::identity_of(&s.id_token)
+                .ok()
+                .map(|id| (s.issuer, id))
+        })
+        .map(|(issuer, id)| {
+            let ids = [id.username, id.subject, id.email]
+                .into_iter()
+                .filter(|x| !x.is_empty())
+                .collect::<Vec<_>>();
+            (issuer, ids)
+        })
+        .unwrap_or_default();
+    let client = match app
+        .kube_client
+        .get_or_try_init(|| crate::engine::kube_client(&app.kube))
+        .await
+    {
+        Ok(c) => c.clone(),
+        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("kube: {e:#}")),
+    };
+    match crate::kubeinfo::recent_sandboxes(client, &ns, &issuer, &ids, 12).await {
+        Ok(items) => {
+            Json(json!({"items": items, "namespace": ns, "mine": !ids.is_empty()})).into_response()
+        }
+        Err(e) => err(
+            StatusCode::BAD_GATEWAY,
+            format!("listing sandboxes in {ns}: {e:#}"),
+        ),
     }
 }
 

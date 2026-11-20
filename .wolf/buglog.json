@@ -1,4 +1,211 @@
 {
   "version": 1,
-  "bugs": []
+  "bugs": [
+    {
+      "id": "bug-001",
+      "date": "2026-11-20",
+      "error_message": "forms render as the text \"null\" in the login and create cards after attaching to an existing run",
+      "root_cause": "buildFlow() replaced the flow's children, detaching the old cards that held the two forms; document.getElementById then returned null and el() appended it as text",
+      "fix": "hold LOGIN_FORM, CREATE_FORM and RUN_BUTTON by reference at load (assets/app.js) instead of looking them up by id after a rebuild",
+      "tags": [
+        "web",
+        "dom",
+        "forms"
+      ],
+      "files": [
+        "assets/app.js"
+      ]
+    },
+    {
+      "id": "bug-002",
+      "date": "2026-11-20",
+      "error_message": "error: used `assert!` to check that a value is empty (clippy::assert_is_empty)",
+      "root_cause": "slate runs clippy 0.1.99, newer than the mac's; the lint does not exist on the mac, so the mac gate passed",
+      "fix": "assert_eq!(x, Vec::<T>::new()) in src/util.rs and src/phases.rs; run the gate on slate before handing back",
+      "tags": [
+        "clippy",
+        "ci",
+        "slate"
+      ],
+      "files": [
+        "src/util.rs",
+        "src/phases.rs"
+      ]
+    },
+    {
+      "id": "bug-003",
+      "date": "2026-11-20",
+      "error_message": "cargo deny: RUSTSEC-2024-0436 paste is unmaintained",
+      "root_cause": "ratatui 0.29 depends on paste",
+      "fix": "ratatui 0.30 (no paste); builds without code changes",
+      "tags": [
+        "cargo-deny",
+        "advisory",
+        "dependencies"
+      ],
+      "files": [
+        "Cargo.toml"
+      ]
+    },
+    {
+      "id": "bug-004",
+      "date": "2026-11-20",
+      "error_message": "secrets map: phantom token and audience tokens shown PENDING after the claim was released",
+      "root_cause": "memory-only secrets fell back to the VM's observed presence, which is Pending when never observed",
+      "fix": "in_memory(): Possible while live, Gone once the claim was bound and has ended, else Pending (src/secrets.rs)",
+      "tags": [
+        "secrets",
+        "logic"
+      ],
+      "files": [
+        "src/secrets.rs"
+      ]
+    },
+    {
+      "id": "bug-005",
+      "date": "2026-11-20",
+      "error_message": "Create card kept saying 'POST /v1/claims in flight' after the broker refused the claim; raw JSON in the note",
+      "root_cause": "the renderer only knew 'claim present' or 'in flight'; a failed state was not a case",
+      "fix": "brokerError() parses 'mediatore: <status> {json}'; the card, rail node and finish line show code, detail and a hint (REFUSAL_HINTS) (assets/app.js)",
+      "tags": [
+        "web",
+        "errors"
+      ],
+      "files": [
+        "assets/app.js"
+      ]
+    },
+    {
+      "id": "bug-006",
+      "date": "2026-11-20",
+      "error_message": "Low Tide ignored MEDIATORE_SESSION",
+      "root_cause": "used Session::default_path() directly; the CLI honours MEDIATORE_SESSION first",
+      "fix": "engine::session_path(): MEDIATORE_SESSION, else the XDG default (src/engine.rs)",
+      "tags": [
+        "config",
+        "cli-parity"
+      ],
+      "files": [
+        "src/engine.rs",
+        "src/web.rs"
+      ]
+    },
+    {
+      "id": "bug-007",
+      "date": "2026-11-20",
+      "error_message": "headless Chrome --virtual-time-budget never finishes on a page attached to a running run",
+      "root_cause": "virtual time stalls with the open EventSource; not a page bug (a plain screenshot renders)",
+      "fix": "screenshots without --virtual-time-budget, with --force-prefers-reduced-motion; replayed events (older than 3 s) refocus without animation",
+      "tags": [
+        "testing",
+        "screenshots"
+      ],
+      "files": [
+        "assets/app.js"
+      ]
+    },
+    {
+      "id": "bug-008",
+      "date": "2026-11-20",
+      "error_message": "LOW_TIDE_WORKLOAD ignored in the web page; the broker kept refusing docker.io (unreachable_registry)",
+      "root_cause": "the page restored the forms from localStorage over the server's defaults, so an old typed workload beat the environment and the config file",
+      "fix": "no browser memory of the forms; the server's values (flag > env > config file) are the only source; old keys removed at load (assets/app.js)",
+      "tags": [
+        "web",
+        "config",
+        "precedence"
+      ],
+      "files": [
+        "assets/app.js"
+      ]
+    },
+    {
+      "id": "bug-009",
+      "date": "2026-11-20",
+      "error_message": "TUI: stages 3-6 invisible; only two boxes drawn",
+      "root_cause": "pending borders and dim text used the palette's DarkGray, which is the background colour in Solarized Dark",
+      "fix": "explicit RGB colours DIM and GOOD (src/tui.rs); TestBackend tests assert every stage title is on screen",
+      "tags": [
+        "tui",
+        "colours"
+      ],
+      "files": [
+        "src/tui.rs"
+      ]
+    },
+    {
+      "id": "bug-010",
+      "date": "2026-11-20",
+      "error_message": "dist/low-tide-darwin-arm64 exits 137 (SIGKILL) right after make dist",
+      "root_cause": "cp over the existing signed binary changed its pages under the kernel's cached code signature",
+      "fix": "rm -f the target before cp in make dist (Makefile)",
+      "tags": [
+        "macos",
+        "build"
+      ],
+      "files": [
+        "Makefile"
+      ]
+    },
+    {
+      "id": "bug-011",
+      "date": "2026-11-20",
+      "error_message": "run step 'Guest attested, sandbox fetched' shown done while the guest never fetched its sandbox",
+      "root_cause": "record.nodeId is set by the broker at bind, not by the guest; the label overclaimed",
+      "fix": "renamed to 'Node identity on the record'; the guest's fetch moved into 'Guest fetched and built the sandbox' (its report is the first evidence) (src/phases.rs)",
+      "tags": [
+        "phases",
+        "honesty"
+      ],
+      "files": [
+        "src/phases.rs"
+      ]
+    },
+    {
+      "id": "bug-012",
+      "date": "2026-11-20",
+      "error_message": "network graph's arrow landed on the middle gateway, implying it carried the tunnel",
+      "root_cause": "with no gateway known, the arrow targeted the row's centre, which is a gateway",
+      "fix": "unknown: the arrow meets a bracket over the whole row; known (seal.via): straight to that gateway (assets/app.js drawWires)",
+      "tags": [
+        "web",
+        "honesty"
+      ],
+      "files": [
+        "assets/app.js"
+      ]
+    },
+    {
+      "id": "bug-013",
+      "date": "2026-11-20",
+      "error_message": "TUI: the workload could not be edited except at its end; no other sandbox create options; no buttons",
+      "root_cause": "a single input string with push/pop only, one prompt at a time",
+      "fix": "src/form.rs: login and create forms with every CLI option, a cursor, checkboxes, choices, buttons ([ Log in ] [ Quit ] / [ Run ] [ Cancel run ]), Ctrl-S, mouse clicks via hit rects; TestBackend tests",
+      "tags": [
+        "tui",
+        "forms"
+      ],
+      "files": [
+        "src/form.rs",
+        "src/tui.rs"
+      ]
+    },
+    {
+      "id": "bug-014",
+      "date": "2026-11-20",
+      "error_message": "runs pile up at 'VM bound': each claim waits behind earlier ones",
+      "root_cause": "Cancel and a new login only stopped Low Tide watching; the old AgentSandbox stayed queued for the pool's next VM",
+      "fix": "Run::cancel_and_release(): stop watching, then DELETE /v1/claims/{name}; used by web Cancel, TUI Cancel run / c, and a new TUI login",
+      "tags": [
+        "claims",
+        "pool"
+      ],
+      "files": [
+        "src/engine.rs",
+        "src/web.rs",
+        "src/tui.rs",
+        "assets/app.js"
+      ]
+    }
+  ]
 }

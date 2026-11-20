@@ -1,0 +1,28 @@
+# Copyright (c) 2026 Erick Bourgeois, Low Tide
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dependency updates, weekly, each ecosystem with a 7-day cooldown (Dependabot waits after a
+# version is published before proposing it). Keeps the SHA-pinned actions current.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Rust crates. The mediatore git pin is moved by hand, with the broker it runs against.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]

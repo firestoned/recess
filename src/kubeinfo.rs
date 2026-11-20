@@ -179,6 +179,204 @@ pub async fn claim_secrets(
     Ok(seen.into_values().collect())
 }
 
+/// A banlieue `VirtualMachinePool` and its members, for "why is my claim not bound yet":
+/// how many are warm, claimed, provisioning, and which member is booting since when.
+///
+/// # Errors
+/// The get or list call failing.
+pub async fn pool_status(client: kube::Client, ns: &str, name: &str) -> anyhow::Result<Value> {
+    let pools = ApiResource::from_gvk_with_plural(
+        &GroupVersionKind::gvk("banlieue.io", "v1alpha1", "VirtualMachinePool"),
+        "virtualmachinepools",
+    );
+    let api: kube::Api<DynamicObject> = kube::Api::namespaced_with(client.clone(), ns, &pools);
+    let Some(pool) = api.get_opt(name).await? else {
+        return Ok(json!({"name": name, "missing": true}));
+    };
+    let p = serde_json::to_value(&pool)?;
+    let warm = p
+        .pointer("/status/conditions")
+        .and_then(Value::as_array)
+        .and_then(|cs| cs.iter().find(|c| str_at(c, "/type") == "Warm"))
+        .map(|c| str_at(c, "/message").to_owned())
+        .unwrap_or_default();
+    let vms: kube::Api<DynamicObject> = kube::Api::namespaced_with(client, ns, &vm_resource());
+    let mut members: Vec<Value> = vms
+        .list(&ListParams::default())
+        .await?
+        .items
+        .iter()
+        .filter(|o| {
+            o.metadata
+                .owner_references
+                .as_ref()
+                .is_some_and(|rs| rs.iter().any(|r| r.name == name))
+                || o.metadata
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with(&format!("{name}-")))
+        })
+        .filter_map(|o| serde_json::to_value(o).ok())
+        .map(|v| {
+            let guest = v
+                .pointer("/status/conditions")
+                .and_then(Value::as_array)
+                .and_then(|cs| cs.iter().find(|c| str_at(c, "/type") == "GuestReady"))
+                .is_some_and(|c| str_at(c, "/status") == "True");
+            json!({
+                "name": str_at(&v, "/metadata/name"),
+                "created": str_at(&v, "/metadata/creationTimestamp"),
+                "power": str_at(&v, "/status/observedPowerState"),
+                "guestReady": guest,
+            })
+        })
+        .collect();
+    members.sort_by(|a, b| str_at(a, "/created").cmp(str_at(b, "/created")));
+    let n = |k: &str| {
+        p.pointer(&format!("/status/{k}"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    };
+    Ok(json!({
+        "name": name,
+        "available": n("available"),
+        "claimed": n("claimed"),
+        "provisioning": n("provisioning"),
+        "replicas": n("replicas"),
+        "warm": warm,
+        "members": members,
+    }))
+}
+
+/// The banlieue claim's `Bound` condition: why a claim is not bound yet, in banlieue's words
+/// (`NoMemberAvailable: no Ready, unclaimed member in pool ...`).
+///
+/// # Errors
+/// The get call failing.
+pub async fn claim_bound(
+    client: kube::Client,
+    ns: &str,
+    name: &str,
+) -> anyhow::Result<Option<Value>> {
+    let ar = ApiResource::from_gvk_with_plural(
+        &GroupVersionKind::gvk("banlieue.io", "v1alpha1", "VirtualMachineClaim"),
+        "virtualmachineclaims",
+    );
+    let api: kube::Api<DynamicObject> = kube::Api::namespaced_with(client, ns, &ar);
+    let Some(o) = api.get_opt(name).await? else {
+        return Ok(None);
+    };
+    let v = serde_json::to_value(&o)?;
+    Ok(v.pointer("/status/conditions")
+        .and_then(Value::as_array)
+        .and_then(|cs| cs.iter().find(|c| str_at(c, "/type") == "Bound"))
+        .map(|c| {
+            json!({
+                "status": str_at(c, "/status"),
+                "reason": str_at(c, "/reason"),
+                "message": str_at(c, "/message"),
+                "since": str_at(c, "/lastTransitionTime"),
+            })
+        }))
+}
+
+/// One `AgentSandbox` as the recent-runs list shows it: what ran, where, and how it ended.
+#[must_use]
+pub fn recent_summary(obj: &Value) -> Value {
+    let exit = obj.pointer("/status/record/exit");
+    let phase = str_at(obj, "/status/phase");
+    let revoked = !str_at(obj, "/status/record/revokedAt").is_empty();
+    let reported = obj.pointer("/status/record/report").is_some();
+    let (status, tone) = match exit {
+        Some(x) => match (
+            x.get("code").and_then(Value::as_i64),
+            x.get("signal").and_then(Value::as_i64),
+        ) {
+            (Some(0), _) => ("exit 0".to_owned(), "ok"),
+            (Some(c), _) => (format!("exit {c}"), "bad"),
+            (None, Some(sig)) => (format!("signal {sig}"), "bad"),
+            _ => ("exited".to_owned(), "ok"),
+        },
+        None if phase == "Failed" => {
+            let r = str_at(obj, "/status/reason");
+            (
+                if r.is_empty() {
+                    "failed".to_owned()
+                } else {
+                    format!("failed: {r}")
+                },
+                "bad",
+            )
+        }
+        None if revoked => ("released before an exit".to_owned(), "idle"),
+        None if phase == "Bound" && reported => ("running".to_owned(), "live"),
+        None if phase == "Bound" => ("starting: no guest report yet".to_owned(), "live"),
+        None if phase == "Releasing" => ("releasing".to_owned(), "idle"),
+        None => ("waiting for a VM".to_owned(), "live"),
+    };
+    let args: Vec<String> = obj
+        .pointer("/spec/workload/args")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({
+        "name": str_at(obj, "/metadata/name"),
+        "namespace": str_at(obj, "/metadata/namespace"),
+        "created": str_at(obj, "/metadata/creationTimestamp"),
+        "image": str_at(obj, "/spec/workload/image"),
+        "args": args,
+        "phase": phase,
+        "vm": str_at(obj, "/status/virtualMachineRef/name"),
+        "addresses": obj.pointer("/status/addresses").cloned().unwrap_or(json!([])),
+        "boundAt": str_at(obj, "/status/boundAt"),
+        "reportedAt": str_at(obj, "/status/record/report/reported_at"),
+        "exitedAt": exit.map(|x| str_at(x, "/exited_at")).unwrap_or_default(),
+        "status": status,
+        "tone": tone,
+    })
+}
+
+/// The `AgentSandbox`es in `ns` whose subject is `ids` at `issuer` (any of the ID token's
+/// names: the broker's `subject_claim` decides which one it pinned), newest first. Without
+/// ids, every sandbox the kubeconfig may list.
+///
+/// # Errors
+/// The list call failing.
+pub async fn recent_sandboxes(
+    client: kube::Client,
+    ns: &str,
+    issuer: &str,
+    ids: &[String],
+    limit: usize,
+) -> anyhow::Result<Vec<Value>> {
+    let ar = ApiResource::from_gvk_with_plural(
+        &GroupVersionKind::gvk("mediatore.io", "v1beta1", "AgentSandbox"),
+        "agentsandboxes",
+    );
+    let api: kube::Api<DynamicObject> = kube::Api::namespaced_with(client, ns, &ar);
+    let trim = |s: &str| s.trim_end_matches('/').to_owned();
+    let mut items: Vec<Value> = api
+        .list(&ListParams::default())
+        .await?
+        .items
+        .iter()
+        .filter_map(|o| serde_json::to_value(o).ok())
+        .filter(|o| {
+            ids.is_empty()
+                || (trim(str_at(o, "/spec/subject/issuer")) == trim(issuer)
+                    && ids.iter().any(|id| id == str_at(o, "/spec/subject/id")))
+        })
+        .collect();
+    items.sort_by(|a, b| {
+        str_at(b, "/metadata/creationTimestamp").cmp(str_at(a, "/metadata/creationTimestamp"))
+    });
+    Ok(items.iter().take(limit).map(recent_summary).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +410,53 @@ mod tests {
         let s = vm_summary(&json!({"metadata": {"name": "x"}}));
         assert_eq!(s["ready"], "");
         assert_eq!(s["addresses"], json!([]));
+    }
+
+    #[test]
+    fn summarises_how_a_run_ended() {
+        let base = |status: Value| {
+            json!({"metadata": {"name": "s", "creationTimestamp": "2026-11-20T06:14:35Z"},
+            "spec": {"workload": {"image": "registry.internal:5000/python", "args": ["python3", "-c", "print(1)"]}},
+            "status": status})
+        };
+        let st = |status: Value| {
+            let v = recent_summary(&base(status));
+            (
+                v["status"].as_str().unwrap().to_owned(),
+                v["tone"].as_str().unwrap().to_owned(),
+            )
+        };
+        assert_eq!(
+            st(json!({"phase": "Bound", "record": {"exit": {"code": 0}}})),
+            ("exit 0".into(), "ok".into())
+        );
+        assert_eq!(
+            st(json!({"phase": "Bound", "record": {"exit": {"code": 3}}})),
+            ("exit 3".into(), "bad".into())
+        );
+        assert_eq!(
+            st(json!({"phase": "Bound", "record": {}})),
+            ("starting: no guest report yet".into(), "live".into())
+        );
+        assert_eq!(
+            st(json!({"phase": "Bound", "record": {"report": {}}})),
+            ("running".into(), "live".into())
+        );
+        assert_eq!(
+            st(json!({"phase": "Failed", "reason": "no member"})),
+            ("failed: no member".into(), "bad".into())
+        );
+        assert_eq!(
+            st(json!({"phase": "Bound", "record": {"revokedAt": "t"}})),
+            ("released before an exit".into(), "idle".into())
+        );
+        assert_eq!(
+            st(json!({"phase": "Pending"})),
+            ("waiting for a VM".into(), "live".into())
+        );
+        assert_eq!(
+            recent_summary(&base(json!({})))["args"],
+            json!(["python3", "-c", "print(1)"])
+        );
     }
 }

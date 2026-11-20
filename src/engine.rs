@@ -21,15 +21,16 @@ use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::runtime::{WatchStreamExt as _, watcher};
 use mediatore_client::delegate::{self, Source};
 use mediatore_client::logs::{LogsQuery, escape_controls};
-use mediatore_client::{Api, LoginOptions, Redirect, Session};
+use mediatore_client::{Api, Session};
 use mediatore_proto::{
     ClaimRequest, LogLine, LogStream, RestartPolicy, Selection, SelectionStrategy, Workload,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use crate::settings::{ClaimSettings, LoginSettings};
 use crate::util::{self, str_at};
 
 /// The stages, top to bottom.
@@ -57,8 +58,8 @@ impl Step {
     #[must_use]
     pub fn title(self) -> &'static str {
         match self {
-            Step::Mint => "Mint token",
-            Step::Create => "Create workload",
+            Step::Mint => "mediatore login",
+            Step::Create => "mediatore sandbox create",
             Step::Seal => "Seal credentials",
             Step::Run => "Run in the sandbox",
             Step::Logs => "Output",
@@ -115,32 +116,6 @@ pub struct Event {
     pub body: Body,
 }
 
-/// What a run needs: the workload and where to take it. The web form sends it; the TUI
-/// builds it from flags and its text field.
-#[allow(clippy::struct_excessive_bools)] // a form: each bool is one checkbox
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Settings {
-    pub workload: String,
-    pub issuer: String,
-    pub client_id: String,
-    pub url: String,
-    pub ca_file: String,
-    pub allow_plain_http: bool,
-    pub namespace: String,
-    pub pool: String,
-    pub pool_selector: Vec<String>,
-    pub strategy: String,
-    pub ttl: u32,
-    pub audiences: Vec<String>,
-    pub delegate: Vec<String>,
-    pub policy: String,
-    pub restart: String,
-    pub logs: bool,
-    pub reuse_session: bool,
-    pub no_browser: bool,
-}
-
 /// The cluster the `AgentSandbox` is watched in.
 #[derive(Debug, Clone, Default)]
 pub struct KubeTarget {
@@ -154,6 +129,10 @@ pub struct KubeTarget {
 /// The run's sub-steps' inputs.
 #[derive(Default)]
 struct Tracker {
+    /// When the run stage started: the first sub-step's clock.
+    started: String,
+    /// The last stall sent, as (step, 15 s bucket), so a stall is re-sent only as it grows.
+    stall_sent: Option<(&'static str, i64)>,
     seen: crate::phases::Seen,
     first_output: Option<String>,
     latest: Option<Value>,
@@ -171,6 +150,8 @@ struct Custody {
     sandbox_ns: String,
     audiences: Vec<String>,
     delegations: usize,
+    /// The pool named in the claim, until the sandbox says which one bound it.
+    pool: String,
     latest: Arc<Mutex<Option<Value>>>,
     ended: Arc<AtomicBool>,
 }
@@ -193,6 +174,9 @@ pub struct Run {
     states: Mutex<std::collections::HashMap<Step, State>>,
     tracker: Mutex<Tracker>,
     claimed: Mutex<Option<Claimed>>,
+    /// The workload, handed over once the token is minted (`submit`).
+    claim_tx: Mutex<Option<tokio::sync::oneshot::Sender<ClaimSettings>>>,
+    claim_rx: Mutex<Option<tokio::sync::oneshot::Receiver<ClaimSettings>>>,
 }
 
 fn now() -> String {
@@ -208,6 +192,7 @@ impl Run {
     pub fn new() -> Arc<Self> {
         let mut b = [0u8; 6];
         let _ = aws_lc_rs::rand::fill(&mut b);
+        let (tx, rx) = tokio::sync::oneshot::channel();
         Arc::new(Self {
             id: hex::encode(b),
             events: Mutex::new(Vec::new()),
@@ -218,6 +203,8 @@ impl Run {
             states: Mutex::new(std::collections::HashMap::new()),
             tracker: Mutex::new(Tracker::default()),
             claimed: Mutex::new(None),
+            claim_tx: Mutex::new(Some(tx)),
+            claim_rx: Mutex::new(Some(rx)),
         })
     }
 
@@ -227,6 +214,55 @@ impl Run {
 
     pub fn cancel(&self) {
         self.cancel.cancel();
+    }
+
+    /// Whether the token is minted and the run waits for the workload.
+    pub fn waiting(&self) -> bool {
+        !self.finished()
+            && lock(&self.claim_tx).is_some()
+            && lock(&self.states)
+                .get(&Step::Mint)
+                .is_some_and(|s| matches!(s, State::Done | State::Skipped))
+    }
+
+    /// Hand the workload to a run that waits for it (`mediatore sandbox create`'s options).
+    ///
+    /// # Errors
+    /// The run is not waiting (not logged in yet, or already claimed), or the workload or the
+    /// user API URL is missing or malformed: refused here, so a typo does not end the run.
+    pub fn submit(&self, c: ClaimSettings, need_url: bool) -> anyhow::Result<()> {
+        util::split_workload(&c.workload)?;
+        restart_of(&c.restart)?;
+        anyhow::ensure!(
+            !need_url || !c.url.trim().is_empty(),
+            "mediatore's URL is required (--mediatore, MEDIATORE_URL)"
+        );
+        anyhow::ensure!(self.waiting(), "not waiting for a workload: log in first");
+        let tx = lock(&self.claim_tx)
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("this run already has its workload"))?;
+        tx.send(c).map_err(|_| anyhow::anyhow!("the run ended"))
+    }
+
+    /// Wait for `submit`, with the Create stage showing that it waits.
+    pub(crate) async fn await_claim(&self) -> anyhow::Result<ClaimSettings> {
+        let rx = lock(&self.claim_rx)
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("the workload was already taken"))?;
+        self.state(
+            Step::Create,
+            State::Active,
+            Some("waiting for the workload: fill in the form and press Run".into()),
+        );
+        self.data(Step::Create, json!({"waiting": true}));
+        let c = rx
+            .await
+            .map_err(|_| anyhow::anyhow!("no workload was given"))?;
+        self.data(
+            Step::Create,
+            json!({"waiting": false, "command": c.command()}),
+        );
+        Ok(c)
     }
 
     /// Events from `from` on, whether the run is over, and a receiver that wakes on the next.
@@ -282,9 +318,9 @@ impl Run {
     }
 
     /// Run the pipeline to its end, then mark the run finished.
-    pub async fn execute(self: Arc<Self>, s: Settings, kube: KubeTarget) {
+    pub async fn execute(self: Arc<Self>, login: LoginSettings, kube: KubeTarget) {
         let result = tokio::select! {
-            r = self.clone().pipeline(&s, &kube) => r,
+            r = self.clone().pipeline(&login, &kube) => r,
             () = self.cancel.cancelled() => Err(anyhow::anyhow!("cancelled")),
         };
         let (ok, note) = match result {
@@ -327,6 +363,22 @@ impl Run {
         self.cancel.is_cancelled()
     }
 
+    /// Stop the run and give its claim back: stop watching first, then
+    /// `DELETE /v1/claims/{name}` (as `mediatore sandbox delete`), so a cancelled run does not
+    /// stay queued for the pool's next VM ahead of the next run. Without a claim yet, only stops.
+    ///
+    /// # Errors
+    /// The broker refusing the delete.
+    pub async fn cancel_and_release(&self) -> anyhow::Result<bool> {
+        let claimed = lock(&self.claimed).is_some();
+        self.cancel();
+        if !claimed {
+            return Ok(false);
+        }
+        self.delete_sandbox().await?;
+        Ok(true)
+    }
+
     /// `DELETE /v1/claims/{name}` for this run's sandbox.
     ///
     /// # Errors
@@ -349,71 +401,46 @@ impl Run {
         Ok(())
     }
 
-    async fn pipeline(self: Arc<Self>, s: &Settings, kube: &KubeTarget) -> anyhow::Result<String> {
-        // What to run, checked before anyone logs in.
-        let parsed = util::split_workload(&s.workload);
-        let restart = match s.restart.as_str() {
-            "" | "never" => Ok(RestartPolicy::Never),
-            "on-failure" => Ok(RestartPolicy::OnFailure),
-            "always" => Ok(RestartPolicy::Always),
-            other => Err(anyhow::anyhow!(
-                "restart {other:?}: never, on-failure or always"
-            )),
-        };
-        let ((image, args), restart) = match (parsed, restart) {
-            (Ok(w), Ok(r)) => (w, r),
-            (Err(e), _) | (_, Err(e)) => {
-                self.active(Step::Create);
-                return Err(e);
-            }
-        };
-
-        // 1. Mint the token: the login, the session it leaves, who the ID token says you are.
+    async fn pipeline(
+        self: Arc<Self>,
+        login: &LoginSettings,
+        kube: &KubeTarget,
+    ) -> anyhow::Result<String> {
+        // 1. `mediatore login`: the token minted, the session it leaves, who the ID token says
+        // you are.
         self.active(Step::Mint);
-        let path = Session::default_path()?;
-        let reusable = Session::load(&path)
-            .ok()
-            .filter(|x| x.is_fresh(120) && x.refresh_token.is_some() && x.issuer == s.issuer);
-        if s.reuse_session && reusable.is_some() {
+        self.data(Step::Mint, json!({"command": login.command()}));
+        let path = session_path()?;
+        let reusable = Session::load(&path).ok().filter(|x| {
+            x.is_fresh(120) && x.refresh_token.is_some() && x.issuer == login.issuer.trim()
+        });
+        if login.reuse_session && reusable.is_some() {
             self.data(
                 Step::Mint,
-                json!({"login": {"reused": true, "issuer": s.issuer}}),
+                json!({"login": {"reused": true, "issuer": login.issuer}}),
             );
             self.note(
                 Step::Mint,
                 "a fresh session with its delegation unspent was reused; no login",
             );
         } else {
-            anyhow::ensure!(
-                !s.issuer.is_empty(),
-                "no issuer: set MEDIATORE_ISSUER or --issuer"
-            );
-            let ca_pem = read_ca(&s.ca_file)?;
-            let opts = LoginOptions {
-                issuer: s.issuer.clone(),
-                client_id: if s.client_id.is_empty() {
-                    "mediatore".into()
-                } else {
-                    s.client_id.clone()
-                },
-                scopes: LoginOptions::default_scopes(),
-                extra_params: vec![],
-                client_secret: None,
-                login_hint: None,
-                ca_pem,
-                // The CLI's default: kubelogin's ports, which the issuer registers exactly.
-                redirect: Redirect {
-                    host: "localhost".into(),
-                    ports: vec![8000, 18000],
-                    path: String::new(),
-                },
-            };
+            let opts = login.to_options()?;
             self.data(
                 Step::Mint,
-                json!({"login": {"issuer": opts.issuer, "clientId": opts.client_id, "scopes": opts.scopes}}),
+                json!({"login": {
+                    "issuer": opts.issuer, "clientId": opts.client_id, "scopes": opts.scopes,
+                    "authParams": opts.extra_params.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+                    "loginHint": opts.login_hint,
+                    "redirect": format!("http://{}:{}{}", opts.redirect.host,
+                        if opts.redirect.ports.is_empty() { "<any>".to_owned() }
+                        else { opts.redirect.ports.iter().map(ToString::to_string).collect::<Vec<_>>().join("|") },
+                        opts.redirect.path),
+                    "privateCa": opts.ca_pem.is_some(),
+                    "clientSecret": opts.client_secret.is_some(),
+                }}),
             );
             let me = self.clone();
-            let no_browser = s.no_browser;
+            let no_browser = login.no_browser;
             let session = mediatore_client::login(&opts, move |url| {
                 me.data(Step::Mint, json!({"authorizeUrl": url}));
                 if !no_browser {
@@ -464,8 +491,13 @@ impl Run {
             ),
         );
 
+        // The workload, once you give it (`mediatore sandbox create`).
+        let c = self.await_claim().await?;
+        let s = &c;
+        let (image, args) = util::split_workload(&s.workload)?;
+        let restart = restart_of(&s.restart)?;
+
         // 2. Create the workload: the broker creates the AgentSandbox, the subject pinned to us.
-        self.active(Step::Create);
         self.data(
             Step::Create,
             json!({"workload": {
@@ -547,6 +579,7 @@ impl Run {
         let (bound_tx, bound_rx) = watch::channel(false);
         let tasks = self.cancel.child_token();
         self.set_logs_on(s.logs);
+        lock(&self.tracker).started = jiff::Timestamp::now().to_string();
         self.active(Step::Seal);
         self.active(Step::Run);
         self.track(None, None);
@@ -584,6 +617,7 @@ impl Run {
                 sandbox_ns: ns.clone(),
                 audiences: s.audiences.clone(),
                 delegations: s.delegate.len(),
+                pool: s.pool.clone(),
                 latest: latest.clone(),
                 ended: ended.clone(),
             };
@@ -591,6 +625,21 @@ impl Run {
             async move {
                 tokio::select! {
                     () = me.watch_custody(ctx) => {},
+                    () = tasks.cancelled() => {},
+                }
+            }
+        });
+        tokio::spawn({
+            let (me, tasks) = (self.clone(), tasks.clone());
+            async move {
+                let tick = async {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        me.check_stall();
+                    }
+                };
+                tokio::select! {
+                    () = tick => {},
                     () = tasks.cancelled() => {},
                 }
             }
@@ -661,6 +710,40 @@ impl Run {
         Ok(summary)
     }
 
+    /// Check the step under way against its limit; send the stall when it starts, every 15 s
+    /// while it lasts, and its end.
+    pub(crate) fn check_stall(&self) {
+        let now = jiff::Timestamp::now();
+        let (stall, changed) = {
+            let mut t = lock(&self.tracker);
+            let ps = crate::phases::phases(
+                t.latest.as_ref(),
+                &t.seen,
+                t.first_output.as_deref(),
+                t.logs_on,
+            );
+            let st = crate::phases::stall(&ps, &t.started, now);
+            let key = st.as_ref().map(|x| (x.key, x.secs / 15));
+            let changed = key != t.stall_sent;
+            t.stall_sent = key;
+            (st, changed)
+        };
+        if changed {
+            if let Some(st) = &stall
+                && st.secs / 15 == crate::phases::stall_first_bucket(st.key)
+            {
+                self.note(
+                    Step::Run,
+                    format!(
+                        "no progress for {} s at \"{}\": {}",
+                        st.secs, st.title, st.hint
+                    ),
+                );
+            }
+            self.data(Step::Run, json!({"stall": stall}));
+        }
+    }
+
     /// Whether output is captured, for the run's sub-steps.
     pub(crate) fn set_logs_on(&self, on: bool) {
         lock(&self.tracker).logs_on = on;
@@ -707,6 +790,7 @@ impl Run {
         let mut gateways: Vec<Value> = Vec::new();
         let mut round = 0u32;
         let mut sealed = false;
+        let mut last_pool = Value::Null;
         loop {
             let obj = lock(&c.latest).clone();
             let vm_name = obj
@@ -794,6 +878,48 @@ impl Run {
                             c.kube.broker_namespace
                         ),
                     );
+                }
+            }
+            // The pool: why a claim waits at "VM bound" (one warm member, the next still booting).
+            let pool_name = obj
+                .as_ref()
+                .map(|o| str_at(o, "/status/poolRef/name").to_owned())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| c.pool.clone());
+            if !pool_name.is_empty() && round.is_multiple_of(2) {
+                match crate::kubeinfo::pool_status(c.client.clone(), &c.sandbox_ns, &pool_name)
+                    .await
+                {
+                    Ok(mut p) => {
+                        // While the claim waits, banlieue's own reason.
+                        let claim = obj
+                            .as_ref()
+                            .map(|o| str_at(o, "/status/claimRef/name").to_owned())
+                            .unwrap_or_default();
+                        let bound = obj
+                            .as_ref()
+                            .is_some_and(|o| !str_at(o, "/status/boundAt").is_empty());
+                        if !claim.is_empty()
+                            && !bound
+                            && let Ok(Some(cond)) = crate::kubeinfo::claim_bound(
+                                c.client.clone(),
+                                &c.sandbox_ns,
+                                &claim,
+                            )
+                            .await
+                        {
+                            p["claim"] = cond;
+                        }
+                        if p != last_pool {
+                            self.data(Step::Run, json!({"pool": p}));
+                            last_pool = p;
+                        }
+                    }
+                    Err(e) => {
+                        if warned.insert("pool") {
+                            self.note(Step::Run, format!("pool {pool_name} not read: {e}"));
+                        }
+                    }
                 }
             }
             let payload = json!({
@@ -1072,7 +1198,7 @@ fn read_ca(path: &str) -> anyhow::Result<Option<Vec<u8>>> {
         .map_err(|e| anyhow::anyhow!("CA file {path}: {e}"))
 }
 
-fn user_api(s: &Settings) -> anyhow::Result<Api> {
+fn user_api(s: &ClaimSettings) -> anyhow::Result<Api> {
     anyhow::ensure!(
         !s.url.is_empty(),
         "no user API URL: set MEDIATORE_URL or --mediatore"
@@ -1086,7 +1212,7 @@ fn user_api(s: &Settings) -> anyhow::Result<Api> {
     }
 }
 
-async fn kube_client(k: &KubeTarget) -> anyhow::Result<kube::Client> {
+pub(crate) async fn kube_client(k: &KubeTarget) -> anyhow::Result<kube::Client> {
     let opts = KubeConfigOptions {
         context: k.context.clone(),
         ..KubeConfigOptions::default()
@@ -1113,6 +1239,27 @@ pub(crate) fn gateway_ips(gateways: &[Value]) -> Vec<String> {
             format!("{} {ip}", str_at(g, "/name")).trim().to_owned()
         })
         .collect()
+}
+
+/// `--restart` as the CLI takes it.
+fn restart_of(s: &str) -> anyhow::Result<RestartPolicy> {
+    match s {
+        "" | "never" => Ok(RestartPolicy::Never),
+        "on-failure" => Ok(RestartPolicy::OnFailure),
+        "always" => Ok(RestartPolicy::Always),
+        other => anyhow::bail!("restart {other:?}: never, on-failure or always"),
+    }
+}
+
+/// The session file, as the CLI finds it: `MEDIATORE_SESSION`, else under the XDG config home.
+///
+/// # Errors
+/// Neither `XDG_CONFIG_HOME` nor `HOME` is set.
+pub fn session_path() -> anyhow::Result<PathBuf> {
+    match std::env::var_os("MEDIATORE_SESSION") {
+        Some(p) if !p.is_empty() => Ok(PathBuf::from(p)),
+        _ => Session::default_path(),
+    }
 }
 
 #[cfg(unix)]
