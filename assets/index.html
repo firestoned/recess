@@ -1,19 +1,27 @@
 <!doctype html>
-<!-- Copyright (c) 2026 Erick Bourgeois, Low Tide -->
+<!-- Copyright (c) 2026 Erick Bourgeois, Recess -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Low Tide</title>
+  <title>Recess</title>
   <link rel="stylesheet" href="/app.css">
+  <script src="/cli.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
   <header class="top">
-    <div class="brand"><span class="mark" aria-hidden="true"></span>Low Tide <span class="dim">for mediatore</span></div>
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Recess <span class="dim">for mediatore</span></div>
     <div class="run-status" id="run-status" hidden></div>
     <div class="top-actions">
+      <label class="theme-pick" title="How the run is shown; switching keeps the run">
+        <span>Theme</span>
+        <select id="theme">
+          <option value="classic" selected>Classic</option>
+          <option value="wired-3d">Wired 3D</option>
+        </select>
+      </label>
       <button id="follow" class="ghost on" type="button" title="Scroll to each stage as it starts">Follow</button>
       <button id="cancel" class="ghost" type="button" hidden>Cancel</button>
       <button id="delete" class="ghost danger" type="button" hidden>Delete sandbox</button>

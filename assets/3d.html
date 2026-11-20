@@ -1,0 +1,149 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Erick Bourgeois, Recess -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recess Wired 3D</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/3d.css">
+  <script src="/cli.js" defer></script>
+  <script src="/3d.js" defer></script>
+</head>
+<body>
+  <canvas id="scene" aria-hidden="true"></canvas>
+  <div id="labels" aria-hidden="true"></div>
+
+  <!-- Two cards laid over the wireframe once the request has left: who you are, on a rolodex
+       card with your picture from the platform you signed in with, and what you asked for. -->
+  <div id="cards">
+    <div id="card-you" class="rcard you" hidden>
+      <div class="rc-tab">you</div>
+      <div class="rc-body">
+        <div class="rc-photo"><img id="you-img" alt="" referrerpolicy="no-referrer" hidden><span id="you-mono"></span></div>
+        <div class="rc-lines">
+          <b id="you-name"></b>
+          <span id="you-handle" class="rc-handle"></span>
+          <span id="you-email"></span>
+          <span id="you-groups" class="rc-chips"></span>
+        </div>
+      </div>
+      <div id="you-meta" class="rc-foot"></div>
+      <div class="rc-slots" aria-hidden="true"><i></i><i></i></div>
+    </div>
+    <div id="card-form" class="rcard form" hidden>
+      <div class="rc-tab">sandbox create</div>
+      <code id="form-cmd" class="rc-cmd"></code>
+      <div id="form-meta" class="rc-foot"></div>
+    </div>
+  </div>
+
+  <header class="bar">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Recess <em>wired 3D</em></div>
+    <ol id="steps" class="steps" aria-label="Stages"></ol>
+    <div class="bar-right">
+      <label class="theme-pick" title="How the run is shown; switching keeps the run">
+        <span>Theme</span>
+        <select id="theme">
+          <option value="classic">Classic</option>
+          <option value="wired-3d" selected>Wired 3D</option>
+        </select>
+      </label>
+      <span id="status" class="pill" hidden></span>
+      <button id="follow" class="ghost" type="button" hidden title="Hand the camera back to the run (Esc)">Follow live</button>
+      <button id="insp-toggle" class="ghost" type="button" hidden>Inspect</button>
+      <button id="cancel" class="ghost" type="button" hidden>Cancel</button>
+      <button id="again" class="ghost" type="button" hidden>New run</button>
+    </div>
+  </header>
+
+  <!-- Two sheets, real inputs laid over the wireframe paper drawn on the canvas: 01 is
+       mediatore login, 02 (its own place, after the login) is mediatore sandbox create. -->
+  <form id="sheet-login" class="sheet" novalidate autocomplete="off">
+    <div class="sec-head"><span class="no">01</span><span>mediatore login</span><span id="stamp" class="stamp" hidden></span></div>
+    <label class="field"><span>Issuer <em class="req">required</em></span>
+      <input id="issuer" data-k="issuer" type="url" spellcheck="false" placeholder="https://issuer.example.com"></label>
+    <details class="opts">
+      <summary>Options</summary>
+      <div class="grid">
+        <label class="field"><span>Client id</span><input data-k="clientId" type="text" spellcheck="false" placeholder="mediatore"></label>
+        <label class="field"><span>Login hint</span><input data-k="loginHint" type="text" spellcheck="false" placeholder="optional"></label>
+        <label class="field wide"><span>Scopes</span><input data-k="scopes" data-list type="text" spellcheck="false" placeholder="openid, profile, email, groups, offline_access"></label>
+        <label class="field wide"><span>Auth params</span><input data-k="authParams" data-list type="text" spellcheck="false" placeholder="key=value, key=value"></label>
+        <label class="field"><span>CA file (PEM)</span><input data-k="caFile" type="text" spellcheck="false" placeholder="private PKI only"></label>
+        <label class="field"><span>Client secret file</span><input data-k="clientSecretFile" type="text" spellcheck="false" placeholder="Google installed-app clients"></label>
+        <label class="field"><span>Redirect ports</span><input data-k="redirectPorts" data-list data-num type="text" spellcheck="false" placeholder="8000, 18000 (0: any)"></label>
+        <label class="field"><span>Redirect host</span><input data-k="redirectHost" type="text" spellcheck="false" placeholder="localhost"></label>
+        <label class="field"><span>Redirect path</span><input data-k="redirectPath" type="text" spellcheck="false" placeholder="none"></label>
+        <label class="check wide"><input data-k="noBrowser" type="checkbox"> --no-browser (show the URL instead)</label>
+        <label class="check wide"><input data-k="reuseSession" type="checkbox"> Reuse a fresh, unspent session</label>
+      </div>
+    </details>
+    <pre id="login-cmd" class="cmd"></pre>
+    <div class="row">
+      <button id="sign" type="submit" class="primary">Sign in</button>
+      <span id="login-note" class="note"></span>
+    </div>
+    <p id="login-error" class="error" role="alert"></p>
+  </form>
+
+  <form id="sheet-create" class="sheet wide gone" novalidate autocomplete="off">
+    <div class="sec-head"><span class="no">02</span><span>mediatore sandbox create</span><span id="signed-as" class="stamp"></span></div>
+    <label class="field"><span>Workload <small>IMAGE [ARG...]</small> <em class="req">required</em></span>
+      <textarea id="workload" data-k="workload" rows="3" spellcheck="false"></textarea></label>
+    <div class="grid">
+      <label class="field wide"><span>mediatore URL <em class="req">required</em></span><input data-k="url" type="url" spellcheck="false" placeholder="https://mediatore.example.com"></label>
+      <label class="field"><span>Namespace</span><input data-k="namespace" type="text" spellcheck="false" placeholder="broker default"></label>
+      <label class="field"><span>Pool</span><input data-k="pool" type="text" spellcheck="false" placeholder="any pool"></label>
+      <label class="field"><span>Pool selector</span><input data-k="poolSelector" data-list type="text" spellcheck="false" placeholder="key=value, key=value"></label>
+      <label class="field"><span>Strategy</span>
+        <select data-k="strategy">
+          <option value="">banlieue default</option>
+          <option value="longest-ready">longest-ready</option>
+          <option value="most-available">most-available</option>
+          <option value="spread">spread</option>
+        </select></label>
+      <label class="field"><span>TTL (s)</span><input data-k="ttl" type="number" min="60" step="60"></label>
+      <label class="field"><span>Restart</span>
+        <select data-k="restart">
+          <option value="never">never</option>
+          <option value="on-failure">on-failure</option>
+          <option value="always">always</option>
+        </select></label>
+      <label class="field"><span>Audiences</span><input data-k="audiences" data-list type="text" spellcheck="false" placeholder="comma separated"></label>
+      <label class="field"><span>Delegate</span><input data-k="delegate" data-list type="text" spellcheck="false" placeholder="anthropic=claude-code"></label>
+      <label class="field"><span>Policy</span><input data-k="policy" type="text" spellcheck="false" placeholder="optional"></label>
+      <label class="field"><span>CA file (PEM)</span><input data-k="caFile" type="text" spellcheck="false" placeholder="private PKI only"></label>
+      <label class="check"><input data-k="logs" type="checkbox"> --logs (capture output)</label>
+      <label class="check"><input data-k="allowPlainHttp" type="checkbox"> --allow-plain-http</label>
+    </div>
+    <pre id="create-cmd" class="cmd"></pre>
+    <div class="row">
+      <button id="send" type="submit" class="primary" disabled>Seal and send</button>
+    </div>
+    <p id="create-error" class="error" role="alert"></p>
+  </form>
+
+  <!-- The inspector: the selected node's or edge's details, and the workload's output. -->
+  <aside id="insp" class="insp" hidden>
+    <div class="insp-head">
+      <div class="tabs" role="tablist">
+        <button id="tab-details" class="tab on" role="tab" type="button">Details</button>
+        <button id="tab-output" class="tab" role="tab" type="button">Output <span id="term-count" class="dim"></span></button>
+      </div>
+      <button id="insp-close" class="ghost small" type="button" title="Hide">Hide</button>
+    </div>
+    <nav id="nodes" class="nodes" aria-label="Nodes"></nav>
+    <div id="details" class="details" tabindex="0"></div>
+    <div id="linewrap" class="linewrap" hidden><pre id="lines" class="lines" tabindex="0"></pre></div>
+  </aside>
+
+  <footer id="caption" class="caption" aria-live="polite">
+    <div id="cap-title" class="cap-title"></div>
+    <div id="cap-detail" class="cap-detail"></div>
+    <div id="cap-fix" class="cap-fix" hidden></div>
+    <div class="cap-hint" id="cap-hint">click a node or an edge · drag to orbit · right-drag or shift-drag to pan · scroll to zoom · Esc to follow the run</div>
+  </footer>
+</body>
+</html>

@@ -3,6 +3,13 @@
 
 # Recess
 
+*When agents go to play.* (Formerly Low Tide.)
+
+![recess web, Wired 3D theme: a request sealed into an envelope, carried through the broker, the Kubernetes API and the sandbox VM, then drilled into](docs/media/web-3d.gif)
+
+*`recess web --theme wired-3d --demo`, at 2.2× speed. The whole tour at real speed:
+[docs/media/web-3d.mp4](docs/media/web-3d.mp4).*
+
 Walk one workload through mediatore and watch each stage happen, in a browser or a terminal.
 The stages follow the `mediatore` CLI's process:
 
@@ -38,14 +45,18 @@ cargo build --release
 
 # Browser: listens on loopback, prints a link carrying a one-time key, opens it.
 MEDIATORE_ISSUER=https://dex.example.com MEDIATORE_URL=https://mediatore.example.com \
-  ./target/release/low-tide web --namespace sandboxes
+  ./target/release/recess web --namespace sandboxes
+
+# The same, opening on the wireframe 3D journey; the page's Theme dropdown switches either way.
+./target/release/recess web --theme wired-3d --namespace sandboxes
 
 # Terminal: the same two forms (login, then sandbox create) with every option and buttons.
-./target/release/low-tide tui --namespace sandboxes
+./target/release/recess tui --namespace sandboxes
 
 # No cluster: a scripted run with placeholder values, for showing the flow.
-./target/release/low-tide web --demo
-./target/release/low-tide tui --demo
+./target/release/recess web --demo
+./target/release/recess web --theme wired-3d --demo
+./target/release/recess tui --demo
 ```
 
 The page keeps one stage in focus at a time. When a stage completes, its card shrinks into a
@@ -68,6 +79,83 @@ names no audience opens no tunnel and its arrow is dashed.
 Under the rail, "your recent sandboxes" lists the AgentSandboxes whose subject is the identity
 in the session file, newest first, with how each ended (exit code, failure, still waiting).
 
+## The 3D page
+
+The Theme dropdown at the top of either page picks how the run is shown: **Classic** (the stage
+cards) or **Wired 3D**. Both are the same run, through the same API and guards, so switching in
+the middle of a run reloads the page onto it; the choice is remembered, and `--theme`
+(`RECESS_THEME`) sets the one a browser sees first. Wired 3D shows the run as a wireframe
+journey. The request starts as a sheet of paper: sign in with the issuer first (the issuer
+stamps the sheet), then write the workload and press "Seal and send". The sheet crumples into
+an envelope with an open lock and travels to the broker (`POST /v1/claims`), on to the
+Kubernetes API (the AgentSandbox), where the lock closes as the credentials are sealed into
+Secrets. It then goes to the sandbox VM the pool bound, opens into the nsjail cage, and the
+workload's output floats up. The exit code is carried to the last ring.
+
+### Drilling in
+
+Once the sheet is sent, the scene is a theatre you can move around, during the run and after
+it. Click any node or edge (or its label, a stage chip in the bar, or a button in the
+inspector's jump list): the camera flies there and the inspector on the right shows it, from
+the top down: its name and what it is, then the facts at a glance, then layers. A protocol
+hop is drawn as a stack (what rides on what: HTTP, TLS, the certificate chain, TCP); a
+component as a nest (what runs inside what: the VM, the SPIRE agent, the guest agent, the
+sandbox filesystem, nftables, the egress proxy, nsjail, jail-exec, the workload).
+
+The nodes: you, the OIDC issuer, the broker, the Kubernetes API, the Secrets vault, the
+sandbox VM with its guest agent, egress proxy and nsjail cage, each egress gateway, each
+audience the workload named, and the exit. The edges: every hop between them, including the
+jail to the proxy (loopback 3128, the only connection the jail may open), the proxy to a
+gateway (a CONNECT tunnel over mutual TLS, as the claim) and the gateway to the audience.
+
+Every fact carries how it is known:
+
+| Tag | Meaning |
+|---|---|
+| seen | Recess saw it: its own TLS handshake, the Kubernetes objects it watches, the session file |
+| reported | mediatore or the guest reported it (the build, the exit, the workload as accepted) |
+| derived | built from what was seen with mediatore's naming rules (the claim's SPIFFE ID) |
+| by design | what mediatore's code at the pinned version does (the sandbox leg is TLS 1.3, X25519MLKEM768, AES-256-GCM only; Landlock connects to 3128 only; ...) |
+| demo | the demo's script, in `--demo` |
+
+The TLS of the broker and the issuer is not assumed: Recess makes its own handshake with
+each (the same client configuration as the CLI) and shows the negotiated version, cipher
+suite, key exchange, ALPN and the presented chain (subject, names, key, signature, validity).
+It dials only those two, and keeps the answer a minute.
+
+Double-click the Secrets vault to open it: its door swings open on a wall of safety deposit
+boxes, one per Secret in the broker's namespace, named for what they hold (`session`,
+`delegation · anthropic`, `output 1`). Click a box to slide it out and see its full name, its
+labels, its seal and who may open it; Recess reads names, labels and annotations, never the
+data. Double-click again to close it.
+
+The gateway that carries the claim's tunnels is drawn in pink, with the tunnel solid, when the
+run's data says which one it is. mediatore does not report it today (the guest's egress proxy
+logs it inside the VM, and the gateways look alike to the broker), so in a live run every
+gateway is a candidate, dashed, and the details say why; the demo's scripted world names one.
+
+| Input | Does |
+|---|---|
+| click | pick a node or an edge |
+| double-click | open or close the vault; elsewhere, reset the orbit |
+| drag | orbit |
+| right-drag, shift-drag, W A S D | pan |
+| scroll, + and - | zoom |
+| arrow keys | orbit |
+| `[` and `]` | the previous or next node |
+| Esc, "Follow live" | hand the camera back to the run |
+
+The renderer is a small one on a 2D canvas, with no 3D library and nothing loaded from
+elsewhere; `prefers-reduced-motion` shortens every animation.
+
+### Recording it
+
+`make record` rebuilds the GIF and MP4 above: it runs the demo with placeholder values only
+(an empty config, `example.com` URLs), drives it in headless Chrome
+(`scripts/record-web-3d.mjs`) and encodes with ffmpeg. It needs node, ffmpeg and Chrome or
+Chromium (`CHROME` names the binary). `RECESS_DEMO_PACE` slows the demo (3 for the
+recording; 1, the default, is the scripted speed).
+
 ## The TUI
 
 The same flow in a terminal: the `mediatore login` form (every option, issuer required, then
@@ -86,20 +174,25 @@ option, then **[ Run ]** or **[ Cancel run ]**), each with the live command bene
 
 ## Config file
 
-`~/.config/low-tide/config.env` (or `--config PATH`, or `LOW_TIDE_CONFIG`): `KEY=VALUE` lines
+Names from before the rename still work, for now: `LOW_TIDE_*` variables (in the file or the
+environment) are read as their `RECESS_*` twins, and `~/.config/low-tide/config.env` is read
+when `~/.config/recess/config.env` does not exist. Recess says so once at start, and
+`recess config` lists each old name with its new one.
+
+`~/.config/recess/config.env` (or `--config PATH`, or `RECESS_CONFIG`): `KEY=VALUE` lines
 in the mediatore CLI's own variables, plus Recess's. A flag beats the environment, the
-environment beats the file. `low-tide config init` writes a commented template;
-`low-tide config` shows what the file set.
+environment beats the file. `recess config init` writes a commented template;
+`recess config` shows what the file set.
 
 ```sh
 MEDIATORE_ISSUER=https://dex.example.com
 MEDIATORE_URL=https://mediatore.example.com
 MEDIATORE_NAMESPACE=sandboxes
 # An image from a registry the pool reaches (the broker refuses others: unreachable_registry).
-LOW_TIDE_WORKLOAD=registry.internal:5000/library/python:3.13-slim python3 -u -c "print('hello world')"
+RECESS_WORKLOAD=registry.internal:5000/library/python:3.13-slim python3 -u -c "print('hello world')"
 ```
 
-Keys other than `MEDIATORE_*`, `LOW_TIDE_*` and `KUBECONFIG` are ignored, and reported.
+Keys other than `MEDIATORE_*`, `RECESS_*` and `KUBECONFIG` are ignored, and reported.
 `MEDIATORE_SESSION` moves the session file, as it does for the CLI.
 
 The default workload is
@@ -114,40 +207,42 @@ empty, `0`, `false`, `no` or `off`), so a config file or a shell can carry all o
 | `--issuer` (required) | `MEDIATORE_ISSUER` | |
 | `--client-id` | `MEDIATORE_CLIENT_ID` | `mediatore` |
 | `--ca-file` | `MEDIATORE_CA_FILE` | |
-| `--scope` | `LOW_TIDE_SCOPES` | `openid,profile,email,groups,offline_access` |
-| `--auth-param` | `LOW_TIDE_AUTH_PARAMS` | |
-| `--login-hint` | `LOW_TIDE_LOGIN_HINT` | |
-| `--client-secret-file` | `LOW_TIDE_CLIENT_SECRET_FILE` | |
-| `--redirect-port` | `LOW_TIDE_REDIRECT_PORTS` | `8000,18000` |
-| `--redirect-host` | `LOW_TIDE_REDIRECT_HOST` | `localhost` |
-| `--redirect-path` | `LOW_TIDE_REDIRECT_PATH` | |
-| `--no-browser` | `LOW_TIDE_NO_BROWSER` | false |
-| `--reuse-session` | `LOW_TIDE_REUSE_SESSION` | false |
+| `--scope` | `RECESS_SCOPES` | `openid,profile,email,groups,offline_access` |
+| `--auth-param` | `RECESS_AUTH_PARAMS` | |
+| `--login-hint` | `RECESS_LOGIN_HINT` | |
+| `--client-secret-file` | `RECESS_CLIENT_SECRET_FILE` | |
+| `--redirect-port` | `RECESS_REDIRECT_PORTS` | `8000,18000` |
+| `--redirect-host` | `RECESS_REDIRECT_HOST` | `localhost` |
+| `--redirect-path` | `RECESS_REDIRECT_PATH` | |
+| `--no-browser` | `RECESS_NO_BROWSER` | false |
+| `--reuse-session` | `RECESS_REUSE_SESSION` | false |
 | (session file) | `MEDIATORE_SESSION` | `~/.config/mediatore/session.json` |
 | `--mediatore` | `MEDIATORE_URL` | |
 | `--allow-plain-http` | `MEDIATORE_ALLOW_PLAIN_HTTP` | false |
 | `--namespace` | `MEDIATORE_NAMESPACE` | the broker's |
-| `--pool` | `LOW_TIDE_POOL` | any in the namespace |
-| `--pool-selector` | `LOW_TIDE_POOL_SELECTOR` | |
-| `--strategy` | `LOW_TIDE_STRATEGY` | banlieue's |
-| `--ttl` | `LOW_TIDE_TTL` | 3600 |
-| `--audience` | `LOW_TIDE_AUDIENCES` | |
-| `--delegate` | `LOW_TIDE_DELEGATE` | |
-| `--policy` | `LOW_TIDE_POLICY` | |
-| `--restart` | `LOW_TIDE_RESTART` | `never` |
-| `--no-logs` | `LOW_TIDE_NO_LOGS` | false (the broker must have `logs.enabled`, else 501) |
-| `--workload` | `LOW_TIDE_WORKLOAD` | the Python hello world |
+| `--pool` | `RECESS_POOL` | any in the namespace |
+| `--pool-selector` | `RECESS_POOL_SELECTOR` | |
+| `--strategy` | `RECESS_STRATEGY` | banlieue's |
+| `--ttl` | `RECESS_TTL` | 3600 |
+| `--audience` | `RECESS_AUDIENCES` | |
+| `--delegate` | `RECESS_DELEGATE` | |
+| `--policy` | `RECESS_POLICY` | |
+| `--restart` | `RECESS_RESTART` | `never` |
+| `--no-logs` | `RECESS_NO_LOGS` | false (the broker must have `logs.enabled`, else 501) |
+| `--workload` | `RECESS_WORKLOAD` | the Python hello world |
 | `--kubeconfig` | `KUBECONFIG` | `~/.kube/config` |
-| `--context` | `LOW_TIDE_CONTEXT` | current |
-| `--broker-namespace` | `LOW_TIDE_BROKER_NAMESPACE` | `banlieue-system` |
-| `--gateway-selector` | `LOW_TIDE_GATEWAY_SELECTOR` | `mediatore.io/role=gateway` |
-| `--gateway-namespace` | `LOW_TIDE_GATEWAY_NAMESPACE` | all |
-| `--gateway-prefix` | `LOW_TIDE_GATEWAY_PREFIX` | `gateway-` |
-| `--no-gateways` | `LOW_TIDE_NO_GATEWAYS` | false |
-| `--listen` (web) | `LOW_TIDE_LISTEN` | `127.0.0.1:7480` |
-| `--no-open` (web) | `LOW_TIDE_NO_OPEN` | false |
-| `--demo` | `LOW_TIDE_DEMO` | false |
-| `--config` | `LOW_TIDE_CONFIG` | `~/.config/low-tide/config.env` |
+| `--context` | `RECESS_CONTEXT` | current |
+| `--broker-namespace` | `RECESS_BROKER_NAMESPACE` | `banlieue-system` |
+| `--gateway-selector` | `RECESS_GATEWAY_SELECTOR` | `mediatore.io/role=gateway` |
+| `--gateway-namespace` | `RECESS_GATEWAY_NAMESPACE` | all |
+| `--gateway-prefix` | `RECESS_GATEWAY_PREFIX` | `gateway-` |
+| `--no-gateways` | `RECESS_NO_GATEWAYS` | false |
+| `--listen` (web) | `RECESS_LISTEN` | `127.0.0.1:7480` |
+| `--theme` (web) | `RECESS_THEME` | `classic` (or `wired-3d`) |
+| `--no-open` (web) | `RECESS_NO_OPEN` | false |
+| `--demo` | `RECESS_DEMO` | false |
+| (demo only) | `RECESS_DEMO_PACE` | 1 (slower above, 0.1 to 10) |
+| `--config` | `RECESS_CONFIG` | `~/.config/recess/config.env` |
 
 To build against a local mediatore checkout instead of the pinned commit, add to `Cargo.toml`
 (and do not commit it):
@@ -165,7 +260,7 @@ Each claim spends the session's refresh token, so each run logs in again unless
 
 ```sh
 make check   # fmt, clippy (pedantic, -D warnings), tests, cargo-deny
-make dist    # release binary into dist/low-tide-<os>-<arch>, with its SHA-256
+make dist    # release binary into dist/recess-<os>-<arch>, with its SHA-256
 make demo    # the scripted run in a browser
 ```
 

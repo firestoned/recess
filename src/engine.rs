@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Erick Bourgeois, Low Tide
+// Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
 //! One run of the pipeline: the workload, the login, the session it leaves, the identity in
@@ -629,6 +629,23 @@ impl Run {
                 }
             }
         });
+        // The claim's egress from the broker's own log: each gateway check of it.
+        tokio::spawn({
+            let me = self.clone();
+            let (client, broker_ns, tasks) =
+                (client.clone(), kube.broker_namespace.clone(), tasks.clone());
+            let claim_uid = claim
+                .uid
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            async move {
+                tokio::select! {
+                    () = me.watch_egress(client, broker_ns, claim_uid) => {},
+                    () = tasks.cancelled() => {},
+                }
+            }
+        });
         tokio::spawn({
             let (me, tasks) = (self.clone(), tasks.clone());
             async move {
@@ -1028,6 +1045,77 @@ impl Run {
 
     /// Kubernetes Events about the sandbox, its claim and its VM, as notes on the sandbox
     /// stage. A watch the caller may not make is reported once, then left alone.
+    /// The claim's egress as the broker logs it (crate::egress): every gateway check of this
+    /// claim, read from the broker pods' logs every 3 s. Says once when the logs cannot be read.
+    async fn watch_egress(&self, client: kube::Client, broker_ns: String, claim_uid: String) {
+        use k8s_openapi::api::core::v1::Pod;
+        if claim_uid.is_empty() || broker_ns.is_empty() {
+            return;
+        }
+        let pods: kube::Api<Pod> = kube::Api::namespaced(client, &broker_ns);
+        let list = kube::api::ListParams::default().labels("app.kubernetes.io/name=mediatore");
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut all: Vec<crate::egress::Check> = Vec::new();
+        let mut warned = false;
+        // The first read covers the claim from its start; later ones, the last few seconds.
+        let mut since: i64 = 300;
+        loop {
+            let mut error = None;
+            let mut fresh = false;
+            match pods.list(&list).await {
+                Ok(found) => {
+                    for pod in found {
+                        let Some(name) = pod.metadata.name else {
+                            continue;
+                        };
+                        let params = kube::api::LogParams {
+                            since_seconds: Some(since),
+                            ..Default::default()
+                        };
+                        match pods.logs(&name, &params).await {
+                            Ok(text) => {
+                                for c in crate::egress::checks(&text, &claim_uid) {
+                                    if seen.insert(format!("{name} {}", c.at)) {
+                                        all.push(c);
+                                        fresh = true;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error =
+                                    Some(format!("the broker's log in {broker_ns} not read: {e}"));
+                            }
+                        }
+                    }
+                }
+                Err(e) => error = Some(format!("the broker's pods in {broker_ns} not listed: {e}")),
+            }
+            if let Some(e) = error {
+                if !warned {
+                    warned = true;
+                    self.data(
+                        Step::Run,
+                        json!({"egress": {"error": e, "source": "broker log"}}),
+                    );
+                }
+            } else if fresh {
+                all.sort_by(|a, b| a.at.cmp(&b.at));
+                let refused = all.iter().filter(|c| !c.live).count();
+                let times: Vec<&str> = all.iter().rev().take(40).map(|c| c.at.as_str()).collect();
+                self.data(
+                    Step::Run,
+                    json!({"egress": {
+                        "checks": all.len(), "refused": refused,
+                        "endpoints": all.iter().rev().find_map(|c| c.endpoints),
+                        "last": all.last().map(|c| c.at.clone()), "times": times, "source": "broker log",
+                    }}),
+                );
+            }
+            since = 15;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    }
+
     async fn watch_events(
         &self,
         client: kube::Client,

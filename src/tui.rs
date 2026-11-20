@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Erick Bourgeois, Low Tide
+// Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
 //! The terminal front end: the stages as a column of boxes, joined by connectors that fill in
@@ -735,7 +735,7 @@ impl Ui {
 
     fn draw_input(&self, f: &mut ratatui::Frame, area: Rect) {
         let line = Line::from(vec![
-            " Low Tide ".bold().fg(Color::Black).bg(Color::Cyan),
+            " Recess ".bold().fg(Color::Black).bg(Color::Cyan),
             Span::raw(" "),
             match self.prompt {
                 Prompt::Issuer => "mediatore login: fill the form, then [ Log in ]".fg(Color::Gray),
@@ -968,7 +968,7 @@ impl Ui {
             && self.claim_form.value("url").trim().is_empty()
         {
             lines.push(Line::from(
-                "mediatore URL is empty: Run will be refused. Type it above, or set MEDIATORE_URL in ~/.config/low-tide/config.env.",
+                "mediatore URL is empty: Run will be refused. Type it above, or set MEDIATORE_URL in ~/.config/recess/config.env.",
             ).fg(Color::Red).bold());
             lines.push(Line::raw(""));
         }
@@ -977,7 +977,7 @@ impl Ui {
             && self.login_form.value("issuer").trim().is_empty()
         {
             lines.push(Line::from(
-                "The issuer is required: type it above, or set MEDIATORE_ISSUER in ~/.config/low-tide/config.env.",
+                "The issuer is required: type it above, or set MEDIATORE_ISSUER in ~/.config/recess/config.env.",
             ).fg(Color::Yellow));
             lines.push(Line::raw(""));
         }

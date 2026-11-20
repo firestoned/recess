@@ -1,9 +1,9 @@
-# Copyright (c) 2026 Erick Bourgeois, Low Tide
+# Copyright (c) 2026 Erick Bourgeois, Recess
 # SPDX-License-Identifier: Apache-2.0
 #
 # cargo-deny: licenses, advisories, bans, sources. The allowlist and the bans are
 # mediatore's (permissive or foundation-governed licenses only; rustls on aws-lc-rs, so
-# neither ring nor OpenSSL), since Low Tide links mediatore's client crate.
+# neither ring nor OpenSSL), since Recess links mediatore's client crate.
 
 [graph]
 all-features = true

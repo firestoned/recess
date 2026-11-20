@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Erick Bourgeois, Low Tide
+// Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
 //! The pure pieces: the workload text field, the ID token's claims for display, and the
@@ -81,6 +81,84 @@ pub struct Identity {
     pub claim_names: Vec<String>,
     /// The first 8 bytes of the token's SHA-256, hex: tells two logins apart, reveals nothing.
     pub fingerprint: String,
+    /// Where the person signed in behind the issuer: dex's connector (`github`, `google`, ...)
+    /// from its subject, or the issuer itself when that is the platform.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub provider: String,
+    /// The person's id at that platform, when dex's subject carries it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub provider_id: String,
+    /// A picture of the person: the token's `picture` claim, or GitHub's own for a GitHub login.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub avatar: String,
+}
+
+/// dex's subject: base64url of a protobuf with the user's id at the upstream (field 1) and the
+/// connector's id (field 2). `None` for any other subject.
+fn dex_subject(sub: &str) -> Option<(String, String)> {
+    let raw = URL_SAFE_NO_PAD.decode(sub.trim_end_matches('=')).ok()?;
+    let (mut i, mut user, mut connector) = (0, None, None);
+    while i < raw.len() {
+        let tag = raw[i];
+        i += 1;
+        // A length under 128: one varint byte, all a subject needs.
+        let n = usize::from(*raw.get(i).filter(|n| **n < 0x80)?);
+        let v = std::str::from_utf8(raw.get(i + 1..i + 1 + n)?)
+            .ok()?
+            .to_owned();
+        i += 1 + n;
+        match tag {
+            0x0a => user = Some(v),
+            0x12 => connector = Some(v),
+            _ => return None,
+        }
+    }
+    Some((user?, connector?))
+}
+
+/// The platform an issuer is, when it is one rather than a broker of logins like dex.
+fn platform_of(issuer: &str) -> &'static str {
+    let host = issuer
+        .trim_start_matches("https://")
+        .split(['/', ':'])
+        .next()
+        .unwrap_or_default();
+    match host {
+        "accounts.google.com" => "google",
+        "token.actions.githubusercontent.com" | "github.com" => "github",
+        "gitlab.com" => "gitlab",
+        h if h.starts_with("login.microsoftonline.com") => "microsoft",
+        _ => "",
+    }
+}
+
+/// A GitHub login: letters, digits and single hyphens, at most 39.
+fn github_login(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 39
+        && !s.starts_with('-')
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// The provider, the id there, and a picture of the person, from the claims at hand.
+fn upstream(issuer: &str, sub: &str, username: &str, picture: &str) -> (String, String, String) {
+    let (provider, id) = dex_subject(sub).map_or_else(
+        || (platform_of(issuer).to_owned(), String::new()),
+        |(id, connector)| (connector, id),
+    );
+    let avatar = if picture.starts_with("https://") {
+        picture.to_owned()
+    } else if provider.contains("github") && github_login(username) {
+        format!("https://github.com/{username}.png")
+    } else if provider.contains("github")
+        && !id.is_empty()
+        && id.bytes().all(|b| b.is_ascii_digit())
+    {
+        format!("https://avatars.githubusercontent.com/u/{id}")
+    } else {
+        String::new()
+    };
+    (provider, id, avatar)
 }
 
 /// The token's fingerprint: the first 8 bytes of its SHA-256, hex.
@@ -124,6 +202,12 @@ pub fn identity_of(token: &str) -> anyhow::Result<Identity> {
     };
     let mut claim_names: Vec<String> = c.keys().cloned().collect();
     claim_names.sort();
+    let (provider, provider_id, avatar) = upstream(
+        &s("iss"),
+        &s("sub"),
+        &s("preferred_username"),
+        &s("picture"),
+    );
     Ok(Identity {
         issuer: s("iss"),
         subject: s("sub"),
@@ -136,6 +220,9 @@ pub fn identity_of(token: &str) -> anyhow::Result<Identity> {
         expires_at: n("exp"),
         claim_names,
         fingerprint: fingerprint(token),
+        provider,
+        provider_id,
+        avatar,
     })
 }
 
@@ -316,6 +403,49 @@ mod tests {
         let id = identity_of(&jwt(&json!({"aud": ["a", "b"], "sub": "s"}))).unwrap();
         assert_eq!(id.audience, ["a", "b"]);
         assert_eq!(id.groups, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_github_login_through_dex_gets_its_provider_and_github_picture() {
+        // dex's subject for octocat (id 583231) through its "github" connector.
+        let sub = URL_SAFE_NO_PAD.encode(b"\x0a\x06583231\x12\x06github");
+        let id = identity_of(&jwt(&json!({
+            "iss": "https://dex.example.com", "sub": sub, "preferred_username": "octocat"
+        })))
+        .unwrap();
+        assert_eq!(
+            (id.provider.as_str(), id.provider_id.as_str()),
+            ("github", "583231")
+        );
+        assert_eq!(id.avatar, "https://github.com/octocat.png");
+        // No login name: the picture by the numeric id.
+        let id = identity_of(&jwt(&json!({"iss": "https://dex.example.com", "sub": sub}))).unwrap();
+        assert_eq!(id.avatar, "https://avatars.githubusercontent.com/u/583231");
+    }
+
+    #[test]
+    fn a_picture_claim_wins_and_only_https_is_shown() {
+        let id = identity_of(&jwt(&json!({
+            "iss": "https://accounts.google.com", "sub": "1093", "picture": "https://lh3.googleusercontent.com/a/x"
+        })))
+        .unwrap();
+        assert_eq!(id.provider, "google");
+        assert_eq!(id.avatar, "https://lh3.googleusercontent.com/a/x");
+        let id = identity_of(&jwt(&json!({
+            "iss": "https://idp.example.com", "sub": "plain-subject", "picture": "http://plain.example/p.png"
+        })))
+        .unwrap();
+        assert_eq!((id.provider.as_str(), id.avatar.as_str()), ("", ""));
+    }
+
+    #[test]
+    fn a_login_name_that_is_no_github_login_gets_no_url() {
+        let sub = URL_SAFE_NO_PAD.encode(b"\x0a\x02id\x12\x06github");
+        let id = identity_of(&jwt(
+            &json!({"sub": sub, "preferred_username": "../evil?x"}),
+        ))
+        .unwrap();
+        assert_eq!(id.avatar, "");
     }
 
     #[test]

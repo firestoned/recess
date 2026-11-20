@@ -1,9 +1,9 @@
-// Copyright (c) 2026 Erick Bourgeois, Low Tide
+// Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
 //! The two forms of the flow, in the CLI's own terms: `mediatore login` first, then
 //! `mediatore sandbox create`. Each renders the command it is equivalent to, so the page and the
-//! TUI show exactly what the CLI would have run; Low Tide runs the same code in-process
+//! TUI show exactly what the CLI would have run; Recess runs the same code in-process
 //! (`mediatore-client`).
 
 use mediatore_client::{LoginOptions, Redirect};
