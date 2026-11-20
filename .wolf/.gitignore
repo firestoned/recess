@@ -1,5 +1,10 @@
-# OpenWolf: machine-local state (committed state: cerebrum.md, STATUS.md,
-# memory.md, buglog.json, anatomy.md, anatomy-index.json, config.json, OPENWOLF.md)
+# OpenWolf: machine-local state. Committed, because every contributor gains from them:
+# OPENWOLF.md, config.json, cron-manifest.json, cerebrum.md (conventions, Do-Not-Repeat)
+# and buglog.json (root causes). Everything else here is one developer's session.
+STATUS.md
+memory.md
+anatomy.md
+anatomy-index.json
 hooks/
 backups/
 cache/

@@ -36,6 +36,65 @@ function el(tag, cls, ...kids) {
   return n;
 }
 
+// A copy-to-clipboard button: the two-sheet icon, a check for a moment once copied. `text`
+// is called at click time, so a live stream copies what has arrived by then.
+function copyButton(text) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const icon = (paths) => {
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const d of paths) {
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d);
+      svg.append(p);
+    }
+    return svg;
+  };
+  const sheets = ['M5.5 5.5h7v8h-7z', 'M3.5 10.5v-8h7'];
+  const check = ['M3 8.5l3 3 7-7'];
+  const b = el('button', 'copy', icon(sheets));
+  b.type = 'button';
+  b.title = 'Copy output';
+  b.setAttribute('aria-label', 'Copy output');
+  b.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    const s = text();
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(s);
+      ok = true;
+    } catch {
+      const ta = el('textarea');
+      ta.value = s;
+      document.body.append(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      ta.remove();
+    }
+    b.replaceChildren(icon(ok ? check : sheets));
+    b.classList.toggle('done', ok);
+    b.title = ok ? 'Copied' : 'Copy failed';
+    setTimeout(() => {
+      b.replaceChildren(icon(sheets));
+      b.classList.remove('done');
+      b.title = 'Copy output';
+    }, 1400);
+  });
+  return b;
+}
+
+// The output box runs from where it starts to the bottom of the window, whatever the font
+// size or zoom: its top is measured on the page, not the viewport, so scrolling does not
+// change it. Called on each render and on resize (zooming is a resize).
+function fitTerm() {
+  const term = $('term');
+  if (!term || !term.isConnected || term.offsetParent === null) return;
+  const top = term.getBoundingClientRect().top + window.scrollY;
+  term.style.height = `${Math.max(160, window.innerHeight - top - 16)}px`;
+}
+window.addEventListener('resize', () => requestAnimationFrame(fitTerm));
+
 function facts(pairs) {
   const dl = el('dl', 'facts');
   for (const [k, v] of pairs) {
@@ -372,6 +431,8 @@ function focusOn(id, animate = true) {
   shown = id;
   shownAt = Date.now();
   applyFocus(animate && !replaying, prev);
+  // The focus animation moves the output box; size it again where it lands.
+  if (id === 'logs') for (const ms of [0, 450]) setTimeout(() => requestAnimationFrame(fitTerm), ms);
 }
 
 function pickStage(id) {
@@ -741,8 +802,8 @@ const render = {
     term.id = 'term';
     for (const l of st.lines) term.append(logLine(l));
     if (st.state === 'active') term.append(el('span', 'cursor'));
-    frag.append(term);
-    requestAnimationFrame(() => { term.scrollTop = term.scrollHeight; });
+    frag.append(el('div', 'termwrap', term, copyButton(() => st.lines.map((l) => l.text).join('\n'))));
+    requestAnimationFrame(() => { fitTerm(); term.scrollTop = term.scrollHeight; });
     return frag;
   },
   exit(st) {

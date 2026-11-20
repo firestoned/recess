@@ -20,12 +20,12 @@
       "id": "bug-002",
       "date": "2026-11-20",
       "error_message": "error: used `assert!` to check that a value is empty (clippy::assert_is_empty)",
-      "root_cause": "slate runs clippy 0.1.99, newer than the mac's; the lint does not exist on the mac, so the mac gate passed",
-      "fix": "assert_eq!(x, Vec::<T>::new()) in src/util.rs and src/phases.rs; run the gate on slate before handing back",
+      "root_cause": "the Linux build host runs clippy 0.1.99, newer than the local one; the lint does not exist locally, so the local gate passed",
+      "fix": "assert_eq!(x, Vec::<T>::new()) in src/util.rs and src/phases.rs; run the gate on the Linux build host before handing back",
       "tags": [
         "clippy",
         "ci",
-        "slate"
+        "clippy-version"
       ],
       "files": [
         "src/util.rs",
