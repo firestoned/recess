@@ -278,6 +278,18 @@ function carrierIdx() {
 // The vault: double-click opens its door on a wall of safety deposit boxes, one per Secret.
 const vault = { open: 0, want: 0 };
 const boxes = () => (model.data.seal.kubeSecrets || []).slice(0, MAX_BOX);
+// The boxes as this run has known them: the ones there now, and the ones removed since (the
+// release deletes the session and the delegations), each kept with what was last seen of it.
+function boxLedger() {
+  const now = model.data.seal.kubeSecrets || [];
+  const names = new Set(now.map((k) => k.name));
+  for (const k of now) {
+    const seen = model.boxSeen.find((x) => x.k.name === k.name);
+    if (seen) { seen.k = k; seen.gone = null; } else model.boxSeen.push({ k, gone: null });
+  }
+  for (const x of model.boxSeen) if (!names.has(x.k.name) && !x.gone) x.gone = new Date();
+  return model.boxSeen;
+}
 // A Secret's short name: what it holds, from its labels, unique within the run (the uids are
 // the same for every box of a claim). The full name is in its details.
 function boxShort(k) {
@@ -362,6 +374,8 @@ function freshModel() {
     phases: {},
     phaseList: [],
     lines: [],
+    // Every safety deposit box this run has shown, and when each one went (null while it is there).
+    boxSeen: [],
     events: [],
     finished: null,
     sent: false,
@@ -751,7 +765,8 @@ function drawEnvelope() {
     segs.push({ pts: [[0.48, 0.38, z], [0.7, 0.38, z], [0.7, 0.12, z], [0.48, 0.12, z]], edges: chain(4, true) });
     segs.push({ pts: [[0.52, 0.34, z], [0.66, 0.34, z], [0.66, 0.16, z], [0.52, 0.16, z]], edges: chain(4, true) });
     segs.push({ pts: [[-0.7, 0.36, z], [-0.35, 0.36, z]], edges: [[0, 1]] });
-    for (const g of segs) lines(g.pts.map((p) => toWorld(p)), g.edges, env.color, a * face * 0.85, 1);
+    // Drawn on the side turned away at flip 1, so mirrored in x to read the right way round.
+    for (const g of segs) lines(g.pts.map((p) => toWorld([-p[0], p[1], p[2]])), g.edges, env.color, a * face * 0.85, 1);
   }
 
   // The back: the flap (open, or shut over the pocket), the folds, and the seal on its tip.
@@ -1297,6 +1312,7 @@ L.you.lit = () => true;
 
 function updateLabels() {
   const d = model.data;
+  boxLedger();
   setLabel(L.issuer, 'OIDC issuer', host($('issuer').value || cfg.login.issuer));
   setLabel(L.broker, 'mediatore broker', host(cfg.claim.url));
   const claim = d.create.claim || {};
@@ -1913,13 +1929,21 @@ function describe(sel) {
       const b = el('button', 'ghost small go', vault.want ? 'Close the vault' : 'Open the vault');
       b.type = 'button'; b.addEventListener('click', toggleVault);
       const ks = boxes();
+      const gone = boxLedger().filter((x) => x.gone);
       const boxesList = el('div', 'deposit');
       ks.forEach((k, i) => { const bt = navButton(boxShort(k), () => select('node', `box${i}`), `node:box${i}`, 'boxbtn'); boxesList.append(bt); });
+      // The ones the run has emptied: still listed, greyed and struck through.
+      for (const x of gone) {
+        const r = el('div', 'boxbtn removed');
+        r.append(el('s', '', boxShort(x.k)), el('span', 'why', `removed ${x.gone.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`));
+        r.title = `${x.k.name}: no longer in ${d.seal.brokerNamespace || 'the broker namespace'}`;
+        boxesList.append(r);
+      }
       return {
         title: 'Secrets vault', summary: 'Your credentials at rest: Secrets in the broker\'s namespace, each sealed. Double-click it (or the button) to open its safety deposit boxes.',
-        glance: [['namespace', d.seal.brokerNamespace, 'seen'], ['Secrets', ks.length || null, 'seen'], ['Recess reads', 'names, labels and annotations only, never the data', 'design']],
+        glance: [['namespace', d.seal.brokerNamespace, 'seen'], ['Secrets', ks.length || gone.length ? `${ks.length}${gone.length ? ` (${gone.length} removed)` : ''}` : null, 'seen'], ['Recess reads', 'names, labels and annotations only, never the data', 'design']],
         sections: [
-          ['Safety deposit boxes', ks.length ? boxesList : el('p', 'empty', 'none yet')], ['', b],
+          ['Safety deposit boxes', ks.length || gone.length ? boxesList : el('p', 'empty', 'none yet')], ['', b],
           ['Custody: where each credential is', list(d.seal.secrets, (s2) => [s2.name, [s2.place, s2.presence, s2.sealed ? 'sealed' : '', s2.memory ? 'in memory' : '', s2.location, s2.note].filter(Boolean).join(' · '), s2.presence === 'held' ? 'live' : ''])],
         ],
         raw: { kubeSecrets: d.seal.kubeSecrets },
