@@ -258,7 +258,8 @@ const SHAPES = {
 const MAX_GW = 5, MAX_AUD = 6, MAX_BOX = 12;
 const gwList = () => model.data.seal.gateways || [];
 const gwCount = () => Math.min(MAX_GW, Math.max(gwList().length, 3));
-const gwPos = (i) => add(ST.vm, [4.8, 2.5, (i - (gwCount() - 1) / 2) * 2.6]);
+// Stacked upward and a little in depth, so from the run's camera each one (and its label) has its own place.
+const gwPos = (i) => { const m = i - (gwCount() - 1) / 2; return add(ST.vm, [4.8, 2.4 - m * 1.8, m * 0.9]); };
 const audList = () => (model.data.create.workload?.audiences || []).slice(0, MAX_AUD);
 const audPos = (i) => add(ST.vm, [8.2, 4.6, 3.2 + (i - (audList().length - 1) / 2) * 2.8]);
 const PROXY = add(ST.vm, [1.45, -0.8, 0.9]);
@@ -422,7 +423,8 @@ const PAPERS = { login: mkPaper(ST.you, 'sheet-login', 4.4, 4.6), create: mkPape
 const POSE = { login: { pos: [0, 0, 9], target: [0, 0, 0] }, create: { pos: add(ST.form, [0, 0, 9]), target: ST.form } };
 // flip: 0 the face (the address), 1 the back (the flap and the seal); seal: the wax seal pressed.
 const env = { pos: [0, 0, 0], scale: 0, lock: 0, open: 0, sink: 0, flip: 1, seal: 1, color: C.wire, leg: null };
-const fx = { packets: [], bursts: [], floats: [], exitShape: null, exitScale: 0, exitColor: C.ok, cageLit: 0, spark: 0, sealLit: 0, failed: false };
+// youCard: sheet 01 turned into your card on its rolodex, from 0 to 1, once you are signed in.
+const fx = { packets: [], bursts: [], floats: [], exitShape: null, exitScale: 0, exitColor: C.ok, cageLit: 0, spark: 0, sealLit: 0, failed: false, youCard: 0 };
 const D = { act: 0, busy: false, speed: 1, gen: 0, sheet: 'login' };
 const orbit = { yaw: 0, pitch: 0, zoom: 1 };
 let clock = 0;
@@ -490,6 +492,7 @@ function targetAct() {
 
 function direct() {
   if (model.finished && !model.finished.ok && !fx.failed && !D.busy) fail();
+  if (!signing && !fx.failed && D.act >= 1 && D.act <= 2 && model.data.mint.identity) signedIn();
   if (D.busy || fx.failed) return;
   const t = targetAct();
   if (D.act >= t) return;
@@ -524,21 +527,33 @@ function fail() {
   paintCaption();
 }
 
+// Signed in: the identity comes back, stamps sheet 01, and sheet 01 becomes your card on its
+// rolodex. Started the moment the token's identity arrives, before the login step is marked
+// done, and awaited by act 2 before it moves on to sheet 02.
+let signing = null;
+function signedIn() {
+  if (signing) return signing;
+  const L = PAPERS.login;
+  signing = (async () => {
+    packet(LEGS.login, { back: true, color: C.ident, dur: 0.6 });
+    stampSheet();
+    burst(add(L.c, [L.W * (L.stampUV[0] - 0.5), L.H * (0.5 - L.stampUV[1]), 0]), C.ident, 1.2, 0.8);
+    await tween(0.3, (k) => { L.stamp = easeOut(k); });
+    captureScribbles(L);
+    L.written = true;
+    LOGIN_FORM.classList.add('gone');
+    await tween(0.45, (k) => { fx.youCard = ease(k); });
+    burst(CARDS.you.c, C.ident, 1.4, 0.6);
+  })();
+  return signing;
+}
+
 const ACTS = {
   // 1. mediatore login: the request leaves for the issuer and comes back, until it is done.
   1: async () => {},
   // 2. Signed: the identity comes back and stamps the sheet; the workload opens.
   2: async () => {
-    const L = PAPERS.login;
-    await packet(LEGS.login, { back: true, color: C.ident, dur: 0.7 });
-    stampSheet();
-    burst(add(L.c, [L.W * (L.stampUV[0] - 0.5), L.H * (0.5 - L.stampUV[1]), 0]), C.ident, 1.2, 0.8);
-    await tween(0.35, (k) => { L.stamp = easeOut(k); });
-    await wait(0.2);
-    // Sheet 01 is done: its writing stays on the paper, and the session goes on to sheet 02.
-    captureScribbles(L);
-    L.written = true;
-    LOGIN_FORM.classList.add('gone');
+    await signedIn();
     D.sheet = 'create';
     await hopAlong(LEGS.form, POSE.login, POSE.create, 2.4, { move: false, packetColor: C.ident });
     // Sheet 02 opens as the camera settles, not after it has come to a full stop.
@@ -859,7 +874,7 @@ function drawStations() {
     // The tier, outlined once tunnels are seen; brighter as a check arrives.
     if ((egressOf().checks || 0) > 0 && fx.cageLit > 0) {
       fx.tierPulse = Math.max(0, (fx.tierPulse || 0) - 0.012);
-      const c = tierPos(), rz = (gwCount() - 1) * 1.3 + 1.2, ry = 1.25, N = 56, pts = [];
+      const c = tierPos(), rz = (gwCount() - 1) * 0.45 + 1, ry = (gwCount() - 1) * 0.9 + 1.2, N = 56, pts = [];
       for (let k = 0; k < N; k++) { const a = (k / N) * Math.PI * 2; pts.push(add(c, [0, Math.sin(a) * ry, Math.cos(a) * rz])); }
       lines(pts, chain(N, true), C.carrier, 0.35 + 0.6 * fx.tierPulse, 1 + fx.tierPulse);
     }
@@ -997,7 +1012,7 @@ function restPose(act) {
   if (act === 5) return follow(add(ST.api, [0.8, 0, 0]), [-3.4, 3.6, 11]);
   if (act === 6) return follow(add(ST.api, [1.4, -0.2, 0.6]), [-3, 3.6, 11]);
   if (act === 7) return follow(add(ST.vm, [0.8, 0, 0]), [-3.4, 3.6, 11]);
-  if (act === 8) return follow(add(ST.vm, [1.2, 0.3, 0]), [-4, 4, 13]);
+  if (act === 8) return follow(add(ST.vm, [2.8, 1.4, 0.4]), [-4, 3.6, 15]);
   return follow(mix(ST.vm, ST.end, 0.6), [-3, 5.5, 19]);
 }
 
@@ -1236,8 +1251,8 @@ function frame(now) {
   drawLegs();
   // Once the request has left, sheet 01 gives way to your card on its rolodex, and sheet 02
   // to the card of what you asked for, on its stack.
-  if (D.act < 4) drawPaper(PAPERS.login, 1);
-  else drawRolodex(CARDS.you);
+  if (fx.youCard < 1) drawPaper(PAPERS.login, 1 - fx.youCard);
+  if (fx.youCard > 0) drawRolodex(CARDS.you, fx.youCard);
   if (D.sheet === 'create') drawPaper(PAPERS.create, 1);
   if (!PAPERS.create.visible) drawCardStack(CARDS.form);
   drawEnvelope();
@@ -1296,7 +1311,7 @@ const AUDL = Array.from({ length: MAX_AUD }, (_, i) => Object.assign(label(() =>
 const BOXL = Array.from({ length: MAX_BOX }, (_, i) => Object.assign(label(() => add(boxAt(i), [0, -0.05, 0.2]), 'seal box', `box${i}`), { show: () => vault.open > 0.85 && i < boxes().length }));
 // Small parts are labelled only when the camera is close enough to read them, or when picked.
 const near = (at, dist, id) => len(sub(cam.pos, at)) < dist || view.sel?.id === id || view.hover?.id === id;
-L.tier = Object.assign(label(() => add(tierPos(), [0, 1.9, 0]), 'carrier', null), { show: () => D.act >= 7 && (egressOf().checks || 0) > 0 });
+L.tier = Object.assign(label(() => add(tierPos(), [0, (gwCount() - 1) * 0.9 + 1.7, 0]), 'carrier', null), { show: () => D.act >= 7 && (egressOf().checks || 0) > 0 });
 L.guest = Object.assign(label(add(GUEST, [-0.6, -0.55, 0.3]), '', 'guest'), { show: () => D.act >= 7 && near(GUEST, 15, 'guest') });
 L.proxy = Object.assign(label(add(PROXY, [0.3, -0.55, 0.3]), '', 'proxy'), { show: () => D.act >= 7 && near(PROXY, 15, 'proxy') });
 L.cage.show = () => D.act >= 7 && near(ST.cage, 17, 'cage');
@@ -1319,7 +1334,7 @@ function updateLabels() {
   setLabel(L.api, 'Kubernetes API', claim.name ? `AgentSandbox ${claim.namespace ? claim.namespace + '/' : ''}${claim.name}` : 'AgentSandbox');
   const ks = (d.seal.kubeSecrets || []).length;
   setLabel(L.vault, 'Secrets', ks ? `${ks} in ${d.seal.brokerNamespace || 'the broker namespace'}, sealed` : 'sealed at rest');
-  const vm = d.seal.memberVm || {};
+  const vm = vmOf();
   const ip = (vm.addresses || [])[0]?.split(' ')[0];
   setLabel(L.vm, 'Sandbox VM', [vm.name, ip].filter(Boolean).join(' · ') || 'a member of the pool');
   setLabel(L.cage, 'nsjail', 'jail-exec: Landlock + seccomp');
@@ -1327,8 +1342,9 @@ function updateLabels() {
   GWL.forEach((l, i) => {
     const g = gwList()[i] || {};
     const ip = (g.addresses || [])[0]?.split(' ')[0];
-    setLabel(l, g.name || 'gateway', i === carrier ? `carrying this claim${ip ? ' · ' + ip : ''}` : ip || '');
+    setLabel(l, g.name || 'gateway', i === carrier ? `carries this claim's tunnels${ip ? ' · ' + ip : ''}` : ip || '');
     l.el.classList.toggle('carrier', i === carrier);
+    l.el.classList.toggle('idle', carrier >= 0 && i !== carrier);
   });
   AUDL.forEach((l, i) => setLabel(l, audList()[i] || '', 'audience'));
   BOXL.forEach((l, i) => setLabel(l, boxShort(boxes()[i]), ''));
@@ -1360,24 +1376,24 @@ for (const card of Object.values(CARDS)) {
 
 // The rolodex: the front card (under the page's card), the cards fanned behind it on the
 // rod, the two wheels and the stand.
-function drawRolodex(card) {
+function drawRolodex(card, alpha = 1) {
   const { c, W } = card, H = card.H, ay = c[1] - H / 2 - 0.3, az = c[2] - 0.55;
-  const rect = (pts) => lines(pts, chain(4, true), C.ident, 0.55, 1);
+  const rect = (pts) => lines(pts, chain(4, true), C.ident, 0.55 * alpha, 1);
   rect([[-W / 2, -H / 2, 0], [W / 2, -H / 2, 0], [W / 2, H / 2, 0], [-W / 2, H / 2, 0]].map((q) => add(c, q)));
   const sway = REDUCED ? 0 : Math.sin(clock * 0.6) * 0.03;
   for (const [i, deg] of [-14, -27, -40, -53, -66].entries()) {
     const a = (deg * Math.PI) / 180 + sway;
     const at = (x, h) => [c[0] + x, ay + h * Math.cos(a), az + h * Math.sin(a)];
-    lines([at(-W / 2, 0.3), at(W / 2, 0.3), at(W / 2, H + 0.3), at(-W / 2, H + 0.3)], chain(4, true), C.ident, 0.4 - i * 0.06, 1, { glow: false });
+    lines([at(-W / 2, 0.3), at(W / 2, 0.3), at(W / 2, H + 0.3), at(-W / 2, H + 0.3)], chain(4, true), C.ident, (0.4 - i * 0.06) * alpha, 1, { glow: false });
   }
   const r = 0.8, n = 28;
   for (const x of [-W / 2 - 0.3, W / 2 + 0.3]) {
     const wheel = Array.from({ length: n }, (_, k) => { const t = (k / n) * Math.PI * 2; return [c[0] + x, ay + Math.cos(t) * r, az + Math.sin(t) * r]; });
-    lines(wheel, chain(n, true), C.ident, 0.5, 1);
-    polyline([[c[0] + x, ay, az], [c[0] + x, ay - r - 0.55, az]], C.ident, 0.45, 1);
+    lines(wheel, chain(n, true), C.ident, 0.5 * alpha, 1);
+    polyline([[c[0] + x, ay, az], [c[0] + x, ay - r - 0.55, az]], C.ident, 0.45 * alpha, 1);
   }
-  polyline([[c[0] - W / 2 - 0.3, ay, az], [c[0] + W / 2 + 0.3, ay, az]], C.ident, 0.6, 1.4);
-  draw(box(W + 1.4, 0.12, 1.8), [c[0], ay - r - 0.6, az], C.ident, 0.4);
+  polyline([[c[0] - W / 2 - 0.3, ay, az], [c[0] + W / 2 + 0.3, ay, az]], C.ident, 0.6 * alpha, 1.4);
+  draw(box(W + 1.4, 0.12, 1.8), [c[0], ay - r - 0.6, az], C.ident, 0.4 * alpha);
 }
 
 // The create's card, on a short stack of the ones before it.
@@ -1392,7 +1408,7 @@ function drawCardStack(card) {
 function placeCards() {
   for (const [key, card] of Object.entries(CARDS)) {
     const el = card.el;
-    const want = D.act >= 4 && (key === 'you' || !PAPERS.create.visible);
+    const want = key === 'you' ? fx.youCard > 0.4 : D.act >= 4 && !PAPERS.create.visible;
     const c = toCam(card.c), l = toCam(add(card.c, [-card.W / 2, 0, 0])), r = toCam(add(card.c, [card.W / 2, 0, 0]));
     let show = want && c[2] > NEAR && l[2] > NEAR && r[2] > NEAR;
     let s = 0, x = 0, y = 0;
@@ -1409,7 +1425,7 @@ function placeCards() {
     s = Math.min(s, 2.2);
     card.H = (card.W * el.offsetHeight) / el.offsetWidth;
     el.style.transform = `translate(${Math.round(x - (el.offsetWidth * s) / 2)}px, ${Math.round(y - (el.offsetHeight * s) / 2)}px) scale(${s.toFixed(3)})`;
-    el.style.opacity = String(clamp(fog(c[2]) * 1.25, 0.4, 1));
+    el.style.opacity = String(clamp(fog(c[2]) * 1.25, 0.4, 1) * (key === 'you' ? clamp((fx.youCard - 0.4) / 0.6) : 1));
     el.style.pointerEvents = 'auto';
     el.classList.toggle('sel', view.sel?.kind === 'node' && view.sel.id === card.node);
   }
@@ -1529,6 +1545,9 @@ function paintCaption() {
     const p = activePhase();
     title = act === 7 ? 'To the sandbox VM' : 'Running in the jail';
     detail = p ? `${p.title}${p.detail ? ' · ' + p.detail : ''}` : n.run || '';
+    const gi = carrierIdx(), eg = egressOf();
+    if (act === 8 && gi >= 0) detail += `${detail ? ' · ' : ''}egress through ${gwList()[gi]?.name}`;
+    else if (act === 8 && (eg.checks || 0) > 0) detail += `${detail ? ' · ' : ''}${eg.checks} gateway check${eg.checks === 1 ? '' : 's'} (which gateway: not reported)`;
   } else if (act >= 9) {
     const x = d.exit;
     title = x.code != null ? `Exit code ${x.code}` : x.signal != null ? `Killed by signal ${x.signal}` : 'Exited';
@@ -1802,16 +1821,44 @@ function tunnelFacts() {
   ];
 }
 
+// The sandbox VM as far as anything says: banlieue's VirtualMachine, else what the
+// AgentSandbox mirrors of it (its name and addresses), which outlives the VM's own lookup.
+function vmOf() {
+  const vm = model.data.seal.memberVm || {}, st = (model.data.run.object || {}).status || {};
+  return {
+    ...vm,
+    name: vm.name || st.virtualMachineRef?.name || '',
+    addresses: vm.addresses?.length ? vm.addresses : st.addresses || [],
+  };
+}
+
+// The trust domain and this run's SPIFFE IDs, from whatever carries one: the VM's attested
+// subject (not every banlieue sets it), the SPIRE agent ID the AgentSandbox records as its
+// node (spiffe://<td>/spire/agent/tpm/<ek hash>), or a gateway's subject. The node SVID shares
+// the agent's EK hash.
+function spiffeOf() {
+  const vm = model.data.seal.memberVm || {}, st = (model.data.run.object || {}).status || {};
+  const tdOf = (s) => (s || '').match(/^spiffe:\/\/([^/]+)\//)?.[1];
+  const agent = st.record?.nodeId || '';
+  const td = tdOf(vm.attestationSubject) || tdOf(agent) || gwList().map((g) => tdOf(g.attestationSubject)).find(Boolean) || '';
+  const ek = agent.match(/\/spire\/agent\/tpm\/([0-9a-f]+)$/)?.[1];
+  const node = vm.attestationSubject || (td && ek ? `spiffe://${td}/banlieue/node/${ek}` : '');
+  const claimUid = model.data.create.claim?.uid || st.claimUid || st.record?.claimUid || '';
+  return { td, agent, node, nodeSeen: !!vm.attestationSubject, claimUid };
+}
+
 // ---- what each node and edge is, from the top down
 
 function describe(sel) {
   const d = model.data, n = model.notes, id = d.mint.identity || {}, se = d.mint.session || {};
   const w = d.create.workload || {}, claim = d.create.claim || {}, obj = d.run.object || {};
-  const vm = d.seal.memberVm || {}, pool = d.run.pool || {}, x = d.exit || {};
+  const vm = vmOf(), pool = d.run.pool || {}, x = d.exit || {};
   const L = cfg.login || {}, Cl = cfg.claim || {};
-  const td = (vm.attestationSubject || '').match(/^spiffe:\/\/([^/]+)\//)?.[1] || '<trust domain>';
-  const claimSvid = `spiffe://${td}/banlieue/claim/${claim.uid || '<claim uid>'}`;
-  const nodeSvid = vm.attestationSubject || `spiffe://${td}/banlieue/node/<ek hash>`;
+  const sp = spiffeOf();
+  const td = sp.td || '<trust domain>';
+  const claimSvid = `spiffe://${td}/banlieue/claim/${sp.claimUid || '<claim uid>'}`;
+  const nodeSvid = sp.node || `spiffe://${td}/banlieue/node/<ek hash>`;
+  const nodeHow = sp.nodeSeen ? 'seen' : sp.node ? 'derived' : 'design';
   const gwSvid = `spiffe://${td}/gateway`;
   const phase = (key) => model.phaseList.find((p) => p.key === key);
   const build = phase('build');
@@ -1951,12 +1998,12 @@ function describe(sel) {
     },
     vm: () => ({
       title: 'Sandbox VM', summary: 'The pool member bound to this claim: its own kernel, its own guest agent, one jail.',
-      glance: [['name', vm.name, 'seen'], ['address', vm.addresses, 'seen'], ['node identity', nodeSvid, vm.attestationSubject ? 'seen' : 'design']],
+      glance: [['name', vm.name, 'seen'], ['address', vm.addresses, 'seen'], ['node identity', nodeSvid, nodeHow], ['trust domain', sp.td || null, sp.agent ? 'seen' : 'derived']],
       sections: [
         ['From the VM down to the workload', stack([
           layer('VM', `${vm.provider || ''} ${vm.providerClass || ''}`.trim(), [['class', vm.class, 'seen'], ['image', vm.image, 'seen'], ['failure domain', vm.failureDomain, 'seen'], ['power', vm.power, 'seen'], ['ready', vm.ready, 'seen'], ['pool', pool.name, 'seen']]),
-          layer('SPIRE agent', 'attested by the VM\'s TPM', [['agent identity', `spiffe://${td}/spire/agent/tpm/<ek hash>`, 'design'], ['issues', 'the node SVID, and the claim SVID once the broker registers it', 'design']]),
-          layer('Guest agent', 'mediatore guest, as root', [['identity', nodeSvid, vm.attestationSubject ? 'seen' : 'design'], ['talks to', 'the broker\'s sandbox listener: GET /v1/me, output, exit', 'design']]),
+          layer('SPIRE agent', 'attested by the VM\'s TPM', [['agent identity', sp.agent || `spiffe://${td}/spire/agent/tpm/<ek hash>`, sp.agent ? 'seen' : 'design'], ['issues', 'the node SVID, and the claim SVID once the broker registers it', 'design']]),
+          layer('Guest agent', 'mediatore guest, as root', [['identity', nodeSvid, nodeHow], ['talks to', 'the broker\'s sandbox listener: GET /v1/me, output, exit', 'design']]),
           layer('Sandbox filesystem', 'a fresh tmpfs per claim', [['mount', '/mnt/sandbox, nosuid, nodev, 0711, half the RAM by default', 'design'], ['image', build?.detail, 'reported']]),
           layer('nftables', 'the ruleset keyed by the sandbox uid', [['ruleset', build?.detail?.match(/ruleset ([0-9a-f]+)/)?.[1], 'reported'], ['allows', 'the relay, the gateways and the proxy, by address', 'design']]),
           proxyLayer, ...jailLayers,
@@ -1967,7 +2014,7 @@ function describe(sel) {
     }),
     guest: () => ({
       title: 'Guest agent', summary: 'mediatore guest on the VM: fetches the sandbox, builds it, starts the proxy and the jail, reports back.',
-      glance: [['identity', nodeSvid, vm.attestationSubject ? 'seen' : 'design'], ['VM', vm.name, 'seen']],
+      glance: [['identity', nodeSvid, nodeHow], ['VM', vm.name, 'seen']],
       sections: [
         ['Its connection to the broker', stack([layer('HTTP', 'GET /v1/me; output batches; the exit report'), SANDBOX_TLS(nodeSvid, `spiffe://${td}/mediatore`)])],
         ['What it did', list(early, phaseRow)],
@@ -2193,7 +2240,7 @@ function attach(id) {
 // Back to the sheet: a new run starts with a new login, as the CLI's one login per claim.
 function reset(full) {
   D.gen++;
-  D.act = 0; D.busy = false; D.speed = 1;
+  D.act = 0; D.busy = false; D.speed = 1; signing = null;
   tweens.length = 0;
   model = freshModel();
   for (const [k, pp] of Object.entries(PAPERS)) Object.assign(pp, { t: 0, morph: 0, stamp: 0, scribbles: [], visible: true, written: false, c: pp.home.slice() });
@@ -2201,7 +2248,7 @@ function reset(full) {
   hop = null;
   LEGS.form.a = ST.you; LEGS.form.b = ST.form; LEGS.broker.a = ST.form;
   Object.assign(env, { pos: [0, 0, 0], scale: 0, lock: 0, open: 0, sink: 0, flip: 1, seal: 1, color: C.wire, leg: null });
-  Object.assign(fx, { packets: [], bursts: [], floats: [], exitShape: null, exitScale: 0, exitColor: C.ok, cageLit: 0, spark: 0, sealLit: 0, failed: false, tierPulse: 0 });
+  Object.assign(fx, { packets: [], bursts: [], floats: [], exitShape: null, exitScale: 0, exitColor: C.ok, cageLit: 0, spark: 0, sealLit: 0, failed: false, tierPulse: 0, youCard: 0 });
   vault.open = 0; vault.want = 0;
   navKey = '';
   for (const leg of Object.values(LEGS)) leg.p = 0;
