@@ -42,6 +42,7 @@ budget_tokens: 2000
 - [2026-11-22] One `web` subcommand: the page is picked by `?theme=` (classic, wired-3d), then the `recess-theme` cookie, then `--theme`/`RECESS_THEME`; `web-3d` is a hidden alias. The copy button (`copyButton`) lives in cli.js, shared by both pages.
 - [2026-11-22] `cargo update -p url` alone did not move past 2.5.8 (RUSTSEC-2026-0592); `--precise 2.5.9` did.
 - [2026-11-22] The live cluster's banlieue VMs carry no `status.attestationSubject`: the trust domain comes from the AgentSandbox's `status.record.nodeId` (`spiffe://<td>/spire/agent/tpm/<ek hash>`, whose hash is also the node SVID's). The VM's name and addresses fall back to the AgentSandbox's `status.virtualMachineRef` and `status.addresses` (3d.js `spiffeOf`, `vmOf`).
+- [2026-11-22] In the jail, virtualenv copies pip from the read-only image into `~/.cache/virtualenv/.../CopyPipInstall` keeping its 0555 directories, so `rm -rf ~/.cache` fails (Permission denied) and `set -e` ends the workload. `chmod -R u+w` the tree first.
 
 ## Do-Not-Repeat
 

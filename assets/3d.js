@@ -195,7 +195,8 @@ const ST = {
   broker: [12, 0.4, -7],
   api: [23, 0, -13],
   vm: [35, 0, -6],
-  end: [46, 0.6, -14],
+  // North of the VM, at right angles to the road in: clear of the gateways and the audiences east of it.
+  end: [36, 0.6, -21],
 };
 ST.vault = add(ST.api, [5.6, -1.0, 3.6]);
 // Sheet 02, mediatore sandbox create: its own place after the login, on the way to the broker.
@@ -1020,7 +1021,8 @@ function restPose(act) {
   if (act === 6) return follow(add(ST.api, [1.4, -0.2, 0.6]), [-3, 3.6, 11]);
   if (act === 7) return follow(add(ST.vm, [0.8, 0, 0]), [-3.4, 3.6, 11]);
   if (act === 8) return follow(add(ST.vm, [2.8, 1.4, 0.4]), [-4, 3.6, 15]);
-  return follow(mix(ST.vm, ST.end, 0.6), [-3, 5.5, 19]);
+  // From above and behind the VM, so the leg to the exit runs up the screen.
+  return follow(add(mix(ST.vm, ST.end, 0.45), [2.5, 0, 0]), [-5, 16, 23]);
 }
 
 // A hop from one node to the next: the camera lifts off and pulls back until the whole leg
