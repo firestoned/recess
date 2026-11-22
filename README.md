@@ -1,7 +1,7 @@
-<!-- Copyright (c) 2026 Erick Bourgeois, Low Tide -->
+<!-- Copyright (c) 2026 Erick Bourgeois, Recess -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Low Tide
+# Recess
 
 Walk one workload through mediatore and watch each stage happen, in a browser or a terminal.
 The stages follow the `mediatore` CLI's process:
@@ -87,7 +87,7 @@ option, then **[ Run ]** or **[ Cancel run ]**), each with the live command bene
 ## Config file
 
 `~/.config/low-tide/config.env` (or `--config PATH`, or `LOW_TIDE_CONFIG`): `KEY=VALUE` lines
-in the mediatore CLI's own variables, plus Low Tide's. A flag beats the environment, the
+in the mediatore CLI's own variables, plus Recess's. A flag beats the environment, the
 environment beats the file. `low-tide config init` writes a commented template;
 `low-tide config` shows what the file set.
 
