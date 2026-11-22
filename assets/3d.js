@@ -863,14 +863,16 @@ function drawStations() {
       const g = gwPos(i), on = i < gws, carried = i === carrier;
       const col = carried ? C.carrier : C.wire;
       const a = !on ? 0.2 : carrier < 0 ? 0.8 : carried ? 1 : 0.35;
-      draw(SHAPES.gateway, g, col, a, { ry: t * (carried ? 2.2 : 0.8) + i, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1 });
-      if (fx.cageLit > 0 && on) {
+      // Once the carrier is known the others stand back: thin, unlit, and with no edge.
+      const unused = carrier >= 0 && !carried;
+      draw(SHAPES.gateway, g, col, a, { ry: t * (carried ? 2.2 : 0.8) + i, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1, glow: !unused });
+      if (fx.cageLit > 0 && on && !unused) {
         // Solid only to the gateway in use. Tunnels seen but which gateway not reported: every
         // live gateway's edge is warm, and dashed. Else candidates, faint and dashed.
         const warm = carrier < 0 && (egressOf().checks || 0) > 0;
         if (carried) lines([PROXY, g], [[0, 1]], col, 0.95 * fx.cageLit, 2.2);
         else if (warm) lines([PROXY, g], [[0, 1]], C.carrier, (0.6 + 0.35 * (fx.tierPulse || 0)) * fx.cageLit, 1.7, { dash: [9, 4], dashOffset: -clock * 30 });
-        else lines([PROXY, g], [[0, 1]], col, (carrier < 0 ? 0.4 : 0.18) * fx.cageLit, 1, { dash: [3, 5], dashOffset: -clock * 20, glow: false });
+        else lines([PROXY, g], [[0, 1]], col, 0.4 * fx.cageLit, 1, { dash: [3, 5], dashOffset: -clock * 20, glow: false });
       }
     }
     // The tier, outlined once tunnels are seen; brighter as a check arrives.
@@ -878,7 +880,9 @@ function drawStations() {
       fx.tierPulse = Math.max(0, (fx.tierPulse || 0) - 0.012);
       const c = tierPos(), rz = (gwCount() - 1) * 0.45 + 1, ry = (gwCount() - 1) * 0.9 + 1.2, N = 56, pts = [];
       for (let k = 0; k < N; k++) { const a = (k / N) * Math.PI * 2; pts.push(add(c, [0, Math.sin(a) * ry, Math.cos(a) * rz])); }
-      lines(pts, chain(N, true), C.carrier, 0.35 + 0.6 * fx.tierPulse, 1 + fx.tierPulse);
+      // Faint once the carrier is known, so it does not read as an edge to the unused ones.
+      if (carrier >= 0) lines(pts, chain(N, true), C.carrier, 0.12 + 0.2 * fx.tierPulse, 1, { glow: false });
+      else lines(pts, chain(N, true), C.carrier, 0.35 + 0.6 * fx.tierPulse, 1 + fx.tierPulse);
     }
     // Packets ride the carrier's tunnel while the work runs.
     if (carrier >= 0 && fx.cageLit > 0 && fx.spark > 0) {
