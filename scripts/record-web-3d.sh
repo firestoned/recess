@@ -27,7 +27,7 @@ node scripts/record-web-3d.mjs "$(head -1 "$work/link")" "$work/frames"
 mkdir -p docs/media
 cd "$work/frames"
 ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i frames.txt \
-  -vf "setpts=PTS/2.2,fps=8,scale=760:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=48:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
+  -vf "setpts=PTS/2.2,fps=7,scale=720:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=40:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
   "$OLDPWD/docs/media/web-3d.gif"
 ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i frames.txt \
   -vf "fps=24,scale=1120:-2:flags=lanczos,format=yuv420p" -c:v libx264 -crf 27 -preset slow \

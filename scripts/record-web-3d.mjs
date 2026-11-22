@@ -84,6 +84,10 @@ await ev(`document.getElementById('details').scrollTo({ top: 420, behavior: 'smo
 await ev(`select('node', 'proxy')`); await sleep(2600);
 await ev(`select('node', 'broker')`); await sleep(1500);
 await ev(`document.getElementById('details').scrollTo({ top: 300, behavior: 'smooth' })`); await sleep(2200);
+// Your card on its rolodex, and the vault after the release: the boxes it emptied, struck through.
+await ev(`select('node', 'you')`); await sleep(2600);
+await ev(`select('node', 'vault')`); await sleep(1400);
+await ev(`(() => { const d = document.getElementById('details'); const b = d.querySelector('.deposit'); if (b) d.scrollTo({ top: d.scrollTop + b.getBoundingClientRect().top - d.getBoundingClientRect().top - 60, behavior: 'smooth' }); })()`); await sleep(2400);
 const [ox, oy] = [360, 430];
 await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: ox, y: oy, button: 'left', clickCount: 1 });
 for (let i = 1; i <= 40; i++) { await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: ox - i * 6, y: oy - i, button: 'left', buttons: 1 }); await sleep(45); }

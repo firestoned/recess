@@ -632,8 +632,12 @@ impl Run {
         // The claim's egress from the broker's own log: each gateway check of it.
         tokio::spawn({
             let me = self.clone();
-            let (client, broker_ns, tasks) =
-                (client.clone(), kube.broker_namespace.clone(), tasks.clone());
+            let (client, broker_ns, tasks, latest) = (
+                client.clone(),
+                kube.broker_namespace.clone(),
+                tasks.clone(),
+                latest.clone(),
+            );
             let claim_uid = claim
                 .uid
                 .as_ref()
@@ -641,7 +645,7 @@ impl Run {
                 .unwrap_or_default();
             async move {
                 tokio::select! {
-                    () = me.watch_egress(client, broker_ns, claim_uid) => {},
+                    () = me.watch_egress(client, broker_ns, claim_uid, latest) => {},
                     () = tasks.cancelled() => {},
                 }
             }
@@ -1047,10 +1051,27 @@ impl Run {
     /// stage. A watch the caller may not make is reported once, then left alone.
     /// The claim's egress as the broker logs it (crate::egress): every gateway check of this
     /// claim, read from the broker pods' logs every 3 s. Says once when the logs cannot be read.
-    async fn watch_egress(&self, client: kube::Client, broker_ns: String, claim_uid: String) {
+    /// The claim's uid is often not known when `POST /v1/claims` answers (the broker creates the
+    /// claim after it): until it is, it is read from the `AgentSandbox`'s `status.claimUid`.
+    async fn watch_egress(
+        &self,
+        client: kube::Client,
+        broker_ns: String,
+        mut claim_uid: String,
+        latest: Arc<Mutex<Option<Value>>>,
+    ) {
         use k8s_openapi::api::core::v1::Pod;
-        if claim_uid.is_empty() || broker_ns.is_empty() {
+        if broker_ns.is_empty() {
             return;
+        }
+        while claim_uid.is_empty() {
+            claim_uid = lock(&latest)
+                .as_ref()
+                .map(|o| str_at(o, "/status/claimUid").to_owned())
+                .unwrap_or_default();
+            if claim_uid.is_empty() {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
         }
         let pods: kube::Api<Pod> = kube::Api::namespaced(client, &broker_ns);
         let list = kube::api::ListParams::default().labels("app.kubernetes.io/name=mediatore");

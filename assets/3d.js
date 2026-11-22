@@ -199,7 +199,7 @@ const ST = {
 };
 ST.vault = add(ST.api, [5.6, -1.0, 3.6]);
 // Sheet 02, mediatore sandbox create: its own place after the login, on the way to the broker.
-ST.form = [5, 0, -3];
+ST.form = [7.5, 0, -2];
 ST.cage = ST.vm;
 
 // The legs, in journey order; p is how much of each is travelled (drawn solid).
@@ -424,7 +424,7 @@ const POSE = { login: { pos: [0, 0, 9], target: [0, 0, 0] }, create: { pos: add(
 // flip: 0 the face (the address), 1 the back (the flap and the seal); seal: the wax seal pressed.
 const env = { pos: [0, 0, 0], scale: 0, lock: 0, open: 0, sink: 0, flip: 1, seal: 1, color: C.wire, leg: null };
 // youCard: sheet 01 turned into your card on its rolodex, from 0 to 1, once you are signed in.
-const fx = { packets: [], bursts: [], floats: [], exitShape: null, exitScale: 0, exitColor: C.ok, cageLit: 0, spark: 0, sealLit: 0, failed: false, youCard: 0 };
+const fx = { packets: [], bursts: [], floats: [], exitShape: null, exitScale: 0, exitColor: C.ok, cageLit: 0, spark: 0, sealLit: 0, failed: false, youCard: 0, floatQueue: [], floatGap: 0 };
 const D = { act: 0, busy: false, speed: 1, gen: 0, sheet: 'login' };
 const orbit = { yaw: 0, pitch: 0, zoom: 1 };
 let clock = 0;
@@ -867,7 +867,8 @@ function drawStations() {
         // Carried: solid. Unknown which, but tunnels seen: every line warm. Else candidates, dashed.
         const warm = carrier < 0 && (egressOf().checks || 0) > 0;
         if (carried) lines([PROXY, g], [[0, 1]], col, 0.9 * fx.cageLit, 1.6);
-        else if (warm) lines([PROXY, g], [[0, 1]], C.carrier, 0.45 * fx.cageLit, 1.1, { dash: [6, 3], dashOffset: -clock * 30, glow: false });
+        // Which one carried each tunnel is not reported, so every live gateway's edge is lit alike.
+        else if (warm) lines([PROXY, g], [[0, 1]], C.carrier, (0.6 + 0.35 * (fx.tierPulse || 0)) * fx.cageLit, 1.7, { dash: [9, 4], dashOffset: -clock * 30 });
         else lines([PROXY, g], [[0, 1]], col, (carrier < 0 ? 0.4 : 0.18) * fx.cageLit, 1, { dash: [3, 5], dashOffset: -clock * 20, glow: false });
       }
     }
@@ -975,7 +976,13 @@ function drawFx(dt) {
     }
     lines(pts, chain(n, true), b.color, 1 - b.t, 1.4);
   }
-  // Output lines float up out of the jail and fade.
+  // Output lines float up out of the jail and fade, one every 0.4 s at most.
+  fx.floatGap = Math.max(0, fx.floatGap - dt);
+  if (D.act >= 8 && fx.floatGap === 0 && fx.floatQueue.length && fx.floats.length < 8) {
+    const q = fx.floatQueue.shift();
+    fx.floats.push({ at: add(ST.cage, [0, 0.6, 0]), dx: 0.25 + Math.random() * 0.4, t: 0, life: 3.2, ...q });
+    fx.floatGap = 0.4;
+  }
   ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
   for (let i = fx.floats.length - 1; i >= 0; i--) {
     const f = fx.floats[i];
@@ -1607,9 +1614,10 @@ function outputLine(e) {
   pre.append(span);
   if (atEnd) pre.scrollTop = pre.scrollHeight;
   $('term-count').textContent = String(model.lines.length);
-  if (fx.floats.length < 36 && D.act >= 8) {
-    fx.floats.push({ at: add(ST.cage, [0, 0.6, 0]), dx: 0.25 + Math.random() * 0.4, t: 0, life: 3.2, text: e.text.slice(0, 40), color: e.stream === 'stderr' ? C.bad : C.wire });
-  }
+  // Output arrives in batches: the lines queue and float up one at a time (drawFx), the
+  // latest few only, so a batch is not drawn as one pile of text.
+  fx.floatQueue.push({ text: e.text.slice(0, 40), color: e.stream === 'stderr' ? C.bad : C.wire });
+  if (fx.floatQueue.length > 6) fx.floatQueue.splice(0, fx.floatQueue.length - 6);
   if (D.act >= 8) showTermAuto();
 }
 // The output opens on its own once the work runs, unless the viewer closed the inspector or
@@ -2248,7 +2256,7 @@ function reset(full) {
   hop = null;
   LEGS.form.a = ST.you; LEGS.form.b = ST.form; LEGS.broker.a = ST.form;
   Object.assign(env, { pos: [0, 0, 0], scale: 0, lock: 0, open: 0, sink: 0, flip: 1, seal: 1, color: C.wire, leg: null });
-  Object.assign(fx, { packets: [], bursts: [], floats: [], exitShape: null, exitScale: 0, exitColor: C.ok, cageLit: 0, spark: 0, sealLit: 0, failed: false, tierPulse: 0, youCard: 0 });
+  Object.assign(fx, { packets: [], bursts: [], floats: [], exitShape: null, exitScale: 0, exitColor: C.ok, cageLit: 0, spark: 0, sealLit: 0, failed: false, tierPulse: 0, youCard: 0, floatQueue: [], floatGap: 0 });
   vault.open = 0; vault.want = 0;
   navKey = '';
   for (const leg of Object.values(LEGS)) leg.p = 0;
