@@ -221,6 +221,20 @@
       "files": [
         "src/engine.rs"
       ]
+    },
+    {
+      "id": "bug-016",
+      "date": "2026-11-22",
+      "file": "assets/3d.js",
+      "error_message": "Wired 3D animation jittery and slow, high CPU, during live runs with lots of output",
+      "root_cause": "outputLine read the output pre's scroll geometry, appended one span, then set scrollTop, per line: two forced layouts of a growing pre per line. Bursts of pip/mkdocs output stalled frames up to 500 ms; the 50 ms dt clamp made the scene also run slow.",
+      "fix": "Queue lines and flush once per frame (flushTerm in frame()) as one fragment with one scroll read and write; keep the latest 2000 spans (copy reads model.lines). Burst test: 18 fps / p95 350 ms -> 59 fps / p95 16.7 ms.",
+      "tags": [
+        "web-3d",
+        "performance",
+        "layout-thrash",
+        "output"
+      ]
     }
   ]
 }

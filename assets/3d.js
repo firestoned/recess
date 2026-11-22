@@ -865,10 +865,10 @@ function drawStations() {
       const a = !on ? 0.2 : carrier < 0 ? 0.8 : carried ? 1 : 0.35;
       draw(SHAPES.gateway, g, col, a, { ry: t * (carried ? 2.2 : 0.8) + i, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1 });
       if (fx.cageLit > 0 && on) {
-        // Carried: solid. Unknown which, but tunnels seen: every line warm. Else candidates, dashed.
+        // Solid only to the gateway in use. Tunnels seen but which gateway not reported: every
+        // live gateway's edge is warm, and dashed. Else candidates, faint and dashed.
         const warm = carrier < 0 && (egressOf().checks || 0) > 0;
-        if (carried) lines([PROXY, g], [[0, 1]], col, 0.9 * fx.cageLit, 1.6);
-        // Which one carried each tunnel is not reported, so every live gateway's edge is lit alike.
+        if (carried) lines([PROXY, g], [[0, 1]], col, 0.95 * fx.cageLit, 2.2);
         else if (warm) lines([PROXY, g], [[0, 1]], C.carrier, (0.6 + 0.35 * (fx.tierPulse || 0)) * fx.cageLit, 1.7, { dash: [9, 4], dashOffset: -clock * 30 });
         else lines([PROXY, g], [[0, 1]], col, (carrier < 0 ? 0.4 : 0.18) * fx.cageLit, 1, { dash: [3, 5], dashOffset: -clock * 20, glow: false });
       }
@@ -1268,6 +1268,7 @@ function frame(now) {
   drawFx(dt);
   drawSelection();
   ctx.globalCompositeOperation = 'source-over';
+  flushTerm();
   updateLabels();
   updateCards();
   placeLabels();
@@ -1606,16 +1607,15 @@ function paintFailure() {
 
 // ------------------------------------------------------------------------------ output
 
+// Lines on the page: the latest only (the copy button takes every line, from model.lines).
+const TERM_MAX = 2000;
+let termPending = [];
 function outputLine(e) {
   model.lines.push(e);
-  const pre = $('lines');
-  const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
-  const span = document.createElement('span');
-  if (e.stream === 'stderr') span.className = 'stderr';
-  span.textContent = e.text + '\n';
-  pre.append(span);
-  if (atEnd) pre.scrollTop = pre.scrollHeight;
-  $('term-count').textContent = String(model.lines.length);
+  // Written once a frame (flushTerm), not once a line: reading the scroll position after each
+  // append forced a layout of the whole output per line, and a burst of pip or mkdocs output
+  // dropped the scene to a few frames a second.
+  termPending.push(e);
   // Output arrives in batches: the lines queue and float up one at a time (drawFx), the
   // latest few only, so a batch is not drawn as one pile of text.
   fx.floatQueue.push({ text: e.text.slice(0, 40), color: e.stream === 'stderr' ? C.bad : C.wire });
@@ -1624,6 +1624,23 @@ function outputLine(e) {
 }
 // The output opens on its own once the work runs, unless the viewer closed the inspector or
 // is looking at something else in it.
+function flushTerm() {
+  if (!termPending.length) return;
+  const pre = $('lines'), batch = termPending.slice(-TERM_MAX);
+  termPending = [];
+  const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+  const frag = document.createDocumentFragment();
+  for (const e of batch) {
+    const span = document.createElement('span');
+    if (e.stream === 'stderr') span.className = 'stderr';
+    span.textContent = e.text + '\n';
+    frag.append(span);
+  }
+  pre.append(frag);
+  for (let extra = pre.childElementCount - TERM_MAX; extra > 0; extra--) pre.firstChild.remove();
+  if (atEnd) pre.scrollTop = pre.scrollHeight;
+  $('term-count').textContent = String(model.lines.length);
+}
 function showTermAuto() {
   if (!inspDismissed && !view.sel && model.lines.length && !inspOpen()) openInspector('output');
 }
@@ -2266,6 +2283,7 @@ function reset(full) {
   loginInFlight = false;
   orbit.yaw = 0; orbit.pitch = 0; orbit.zoom = 1;
   $('lines').replaceChildren();
+  termPending = [];
   $('term-count').textContent = '';
   $('insp').hidden = true;
   inspDismissed = false;

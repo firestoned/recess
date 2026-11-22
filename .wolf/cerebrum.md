@@ -47,6 +47,7 @@ budget_tokens: 2000
 ## Do-Not-Repeat
 
 - [2026-11-22] Changed src/util.rs and ran only `cargo test`; CI failed on `cargo fmt --check` (PR 4). Run `cargo fmt` (or `make check` on slate) after every Rust edit, not only after the first.
+- [2026-11-22] The demo's few output lines hid a per-line forced layout in the 3D output box; live bursts dropped it to 18 fps. Write DOM from streamed events once a frame, never read layout (scrollHeight, offsetWidth) per event, and load-test with a burst of thousands of lines.
 - [2026-11-22] Stopped test servers with `pkill -f "recess web"`, which also matches the user's own running Recess. Stop only your own, by exact path and port.
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
