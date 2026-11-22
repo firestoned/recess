@@ -271,6 +271,8 @@ function viaOf() { return model.data.seal.via ?? model.data.run.via ?? null; }
 // The claim's tunnels as the broker's log shows them: each gateway check of the claim.
 const egressOf = () => model.data.run.egress || {};
 const tierPos = () => mix(gwPos(0), gwPos(gwCount() - 1), 0.5);
+// Where this claim's traffic left by, once any is seen: the carrier, else the tier. Null before.
+const egressTo = () => ((egressOf().checks || 0) > 0 ? (carrierIdx() >= 0 ? gwPos(carrierIdx()) : tierPos()) : null);
 function carrierIdx() {
   const v = viaOf();
   const name = typeof v === 'string' ? v : v?.gateway;
@@ -863,18 +865,14 @@ function drawStations() {
       const g = gwPos(i), on = i < gws, carried = i === carrier;
       const col = carried ? C.carrier : C.wire;
       const a = !on ? 0.2 : carrier < 0 ? 0.8 : carried ? 1 : 0.35;
-      // Once the carrier is known the others stand back: thin, unlit, and with no edge.
+      // Once the carrier is known the others stand back: thin and unlit.
       const unused = carrier >= 0 && !carried;
       draw(SHAPES.gateway, g, col, a, { ry: t * (carried ? 2.2 : 0.8) + i, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1, glow: !unused });
-      if (fx.cageLit > 0 && on && !unused) {
-        // Solid only to the gateway in use. Tunnels seen but which gateway not reported: every
-        // live gateway's edge is warm, and dashed. Else candidates, faint and dashed.
-        const warm = carrier < 0 && (egressOf().checks || 0) > 0;
-        if (carried) lines([PROXY, g], [[0, 1]], col, 0.95 * fx.cageLit, 2.2);
-        else if (warm) lines([PROXY, g], [[0, 1]], C.carrier, (0.6 + 0.35 * (fx.tierPulse || 0)) * fx.cageLit, 1.7, { dash: [9, 4], dashOffset: -clock * 30 });
-        else lines([PROXY, g], [[0, 1]], col, 0.4 * fx.cageLit, 1, { dash: [3, 5], dashOffset: -clock * 20, glow: false });
-      }
     }
+    // One edge out, and only once there is traffic: to the gateway carrying the tunnels, or,
+    // while which one is not reported, to the tier as a whole. No edges to mere candidates.
+    const out = egressTo();
+    if (out && fx.cageLit > 0) lines([PROXY, out], [[0, 1]], C.carrier, (carrier >= 0 ? 0.95 : 0.6 + 0.35 * (fx.tierPulse || 0)) * fx.cageLit, carrier >= 0 ? 2.2 : 1.8);
     // The tier, outlined once tunnels are seen; brighter as a check arrives.
     if ((egressOf().checks || 0) > 0 && fx.cageLit > 0) {
       fx.tierPulse = Math.max(0, (fx.tierPulse || 0) - 0.012);
@@ -894,14 +892,13 @@ function drawStations() {
   // The audiences the workload named: where the gateways let it reach.
   const auds = audList();
   if (auds.length && act >= 7) {
-    const from = carrier >= 0 ? [gwPos(carrier)] : Array.from({ length: Math.min(gws, gwCount()) }, (_, i) => gwPos(i));
+    const from = egressTo();
     auds.forEach((_, i) => {
       const a = audPos(i);
       draw(SHAPES.audience, a, C.ident, 0.85, { ry: t * 0.5 + i });
-      // Allowed, and reached by some tunnel once checks are seen; which audience each tunnel
-      // was for is not reported.
-      const reached = (egressOf().checks || 0) > 0;
-      if (fx.cageLit > 0) for (const f of from) lines([f, a], [[0, 1]], carrier >= 0 || reached ? C.carrier : C.ident, (reached ? 0.45 : 0.3) * fx.cageLit, 1, { dash: reached ? [6, 3] : [2, 6], dashOffset: -clock * 16, glow: false });
+      // An edge only once tunnels are seen, from the one place traffic left by; which audience
+      // each tunnel was for is not reported.
+      if (from && fx.cageLit > 0) lines([from, a], [[0, 1]], C.carrier, 0.5 * fx.cageLit, 1.2, { glow: false });
     });
   }
   if (fx.spark > 0) {
@@ -1141,8 +1138,8 @@ const EDGES = [
   { id: 'api', name: 'Broker → API', pts: () => legPts(LEGS.api), show: always },
   { id: 'vm', name: 'API → VM', pts: () => legPts(LEGS.vm), show: always },
   { id: 'jail', name: 'Jail → proxy', pts: () => [ST.cage, PROXY], show: () => D.act >= 7 },
-  { id: 'tunnel', name: 'Proxy → gateway', pts: () => [PROXY, gwPos(Math.max(0, carrierIdx() >= 0 ? carrierIdx() : Math.floor(gwCount() / 2)))], show: () => D.act >= 7 && gwList().length > 0 },
-  { id: 'upstream', name: 'Gateway → audience', pts: () => audList().length ? [gwPos(Math.max(0, carrierIdx() >= 0 ? carrierIdx() : Math.floor(gwCount() / 2))), audPos(0)] : [], show: () => D.act >= 7 && audList().length > 0 },
+  { id: 'tunnel', name: 'Proxy → gateway', pts: () => [PROXY, egressTo() || tierPos()], show: () => D.act >= 7 && gwList().length > 0 },
+  { id: 'upstream', name: 'Gateway → audience', pts: () => audList().length ? [egressTo() || tierPos(), audPos(0)] : [], show: () => D.act >= 7 && audList().length > 0 },
   { id: 'end', name: 'VM → exit', pts: () => legPts(LEGS.end), show: always },
 ];
 const nodeById = (id) => NODES.find((n) => n.id === id);
@@ -2177,7 +2174,7 @@ function renderDetails() {
   for (const [title, body] of info.sections) { if (title) box.append(el('h3', null, title)); box.append(body); }
   if (info.raw && (Array.isArray(info.raw) ? info.raw.length : Object.keys(info.raw).length)) {
     const det = el('details');
-    det.append(el('summary', null, 'raw'), el('pre', null, JSON.stringify(info.raw, null, 2)));
+    det.append(el('summary', null, 'raw (YAML)'), el('pre', null, toYaml(info.raw)));
     box.append(det);
   }
   box.scrollTop = scroll;

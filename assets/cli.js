@@ -159,3 +159,46 @@ function copyButton(text) {
   });
   return b;
 }
+
+// YAML for reading, as kubectl prints objects: block mappings and sequences, two spaces a
+// level, strings quoted only when plain YAML would read them as something else, multi-line
+// strings as literal blocks. Values are JSON (what the API and the broker return).
+function toYaml(v) {
+  const plain = /^[A-Za-z0-9_./][A-Za-z0-9_./ :@+-]*$/;
+  const special = /^(true|false|yes|no|on|off|y|n|null|~|[-+]?(\.?\d[\d_]*\.?\d*([eE][-+]?\d+)?|0x[0-9a-fA-F]+|\.inf|\.nan))$/i;
+  const str = (s) => (s !== '' && plain.test(s) && !special.test(s) && !/:\s|\s#|\s$|: *$/.test(s) ? s : JSON.stringify(s));
+  const key = (k) => (plain.test(k) && !special.test(k) && !k.includes(': ') ? k : JSON.stringify(k));
+  const scalar = (x, ind) => {
+    if (x === null || x === undefined) return 'null';
+    if (typeof x === 'string') {
+      if (x.includes('\n')) {
+        const chomp = x.endsWith('\n') ? '' : '-';
+        const body = x.replace(/\n$/, '').split('\n').map((l) => (l ? ind + '  ' + l : '')).join('\n');
+        return `|${chomp}\n${body}`;
+      }
+      return str(x);
+    }
+    return String(x);
+  };
+  const isBlock = (x) => x && typeof x === 'object' && (Array.isArray(x) ? x.length : Object.keys(x).length);
+  const empty = (x) => (Array.isArray(x) ? '[]' : '{}');
+  const emit = (x, ind) => {
+    const out = [];
+    if (Array.isArray(x)) {
+      for (const item of x) {
+        if (isBlock(item)) {
+          // The first line of a nested block shares the dash.
+          const inner = emit(item, ind + '  ');
+          out.push(ind + '- ' + inner.slice(ind.length + 2));
+        } else out.push(ind + '- ' + (item && typeof item === 'object' ? empty(item) : scalar(item, ind)));
+      }
+    } else {
+      for (const [k, val] of Object.entries(x)) {
+        if (isBlock(val)) out.push(`${ind}${key(k)}:\n${emit(val, Array.isArray(val) ? ind : ind + '  ')}`);
+        else out.push(`${ind}${key(k)}: ${val && typeof val === 'object' ? empty(val) : scalar(val, ind)}`);
+      }
+    }
+    return out.join('\n');
+  };
+  return isBlock(v) ? emit(v, '') : v && typeof v === 'object' ? empty(v) : scalar(v, '');
+}
