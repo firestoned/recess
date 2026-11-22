@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Erick Bourgeois, Low Tide
+// Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
 //! What the Kubernetes API says around the sandbox: the egress gateway VMs, the sandbox's own

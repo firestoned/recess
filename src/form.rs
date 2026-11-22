@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Erick Bourgeois, Low Tide
+// Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
 //! The TUI's forms: `mediatore login` and `mediatore sandbox create`, every option the CLI

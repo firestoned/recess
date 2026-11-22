@@ -1,9 +1,9 @@
-# Copyright (c) 2026 Erick Bourgeois, Low Tide
+# Copyright (c) 2026 Erick Bourgeois, Recess
 # SPDX-License-Identifier: Apache-2.0
 #
 # Build gate: license headers, signed commits, fmt, clippy, tests, cargo-audit, cargo-deny,
 # then the release binary for Linux (x86_64) and macOS (arm64), attached to a published
-# release. Mirrors mediatore's build.yaml at Low Tide's scale. All logic lives in Makefile
+# release. Mirrors mediatore's build.yaml at Recess's scale. All logic lives in Makefile
 # targets; jobs only install tools and call make.
 #
 # No `paths:` filter: a required check that never triggers blocks the PR forever.
@@ -52,7 +52,7 @@ jobs:
       - name: Check license headers
         uses: firestoned/github-actions/security/license-check@f52366c4f57f0110012035ac1bcd0bee4075b3e9 # v1.4.0
         with:
-          copyright-holder: "Erick Bourgeois, Low Tide"
+          copyright-holder: "Erick Bourgeois, Recess"
           license-id: "Apache-2.0"
 
   verify-commits:
@@ -199,7 +199,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: low-tide-${{ matrix.name }}
+          name: recess-${{ matrix.name }}
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -215,7 +215,7 @@ jobs:
       - name: Download binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: low-tide-*
+          pattern: recess-*
           path: dist
           merge-multiple: true
 

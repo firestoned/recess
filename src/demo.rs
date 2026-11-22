@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Erick Bourgeois, Low Tide
+// Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
 //! `--demo`: a scripted run through the same event stream and the same pure functions
@@ -29,7 +29,29 @@ fn now_plus(secs: i64) -> String {
 }
 
 async fn pause(ms: u64) {
-    tokio::time::sleep(Duration::from_millis(ms)).await;
+    tokio::time::sleep(Duration::from_millis(paced(ms, pace()))).await;
+}
+
+/// How much slower than scripted the demo runs: `RECESS_DEMO_PACE` (1 by default), for a
+/// recording or a talk where each step should be seen. Bounded to 0.1..=10.
+fn pace() -> f64 {
+    static PACE: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *PACE.get_or_init(|| parse_pace(std::env::var("RECESS_DEMO_PACE").ok().as_deref()))
+}
+
+fn parse_pace(v: Option<&str>) -> f64 {
+    v.and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|p| p.is_finite())
+        .map_or(1.0, |p| p.clamp(0.1, 10.0))
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)] // ms in 0..=10 * a few seconds
+fn paced(ms: u64, pace: f64) -> u64 {
+    (ms as f64 * pace).round() as u64
 }
 
 /// The demo's world: the gateways, and the secrets map as the custody loop would send it.
@@ -87,10 +109,17 @@ impl World {
             vm_name: vm.into(),
             gateway_ips: gateway_ips(&self.gateways),
         });
+        // Which gateway carries the claim's tunnels: mediatore does not report it today (the
+        // guest's proxy logs it in the VM); the demo's world says, so the page can show it.
+        let via = if vm.is_empty() {
+            Value::Null
+        } else {
+            json!({"gateway": "gateway-02", "how": "demo"})
+        };
         r.data(
             Step::Seal,
             json!({"secrets": map, "kubeSecrets": kube, "brokerNamespace": "banlieue-system",
-                "memberVm": member, "gateways": self.gateways,
+                "memberVm": member, "gateways": self.gateways, "via": via,
                 "gatewayQuery": {"selector": "mediatore.io/role=gateway", "namespace": "", "prefix": "gateway-"}}),
         );
     }
@@ -113,6 +142,15 @@ fn segment_secret() -> Value {
         "labels": {"mediatore.io/logs": "segment", "mediatore.io/claim-uid": CLAIM_UID},
         "annotations": {"mediatore.io/seal": "v1", "mediatore.io/first-seq": "0", "mediatore.io/last-seq": "0"},
         "created": now()})
+}
+
+/// Gateway checks of the claim, as the engine reads them from the broker's log; scripted.
+fn egress(r: &Run, checks: usize) {
+    let times: Vec<String> = (0..checks).map(|_| now()).collect();
+    r.data(
+        Step::Run,
+        json!({"egress": {"checks": checks, "refused": 0, "endpoints": 5, "last": now(), "times": times, "source": "demo"}}),
+    );
 }
 
 /// The recent-runs list the demo shows: placeholders.
@@ -179,7 +217,8 @@ pub async fn run(r: Arc<Run>, login: LoginSettings) {
         "refreshToken": "held, to be delegated with the claim"}}));
     let t = jiff::Timestamp::now().as_second();
     r.data(Step::Mint, json!({"identity": {"issuer": "https://dex.example.com", "subject": "CgZvY3RvY2F0EgZnaXRodWI",
-        "username": "octocat", "email": "octocat@example.com", "audience": ["mediatore"],
+        "username": "octocat", "name": "The Octocat", "email": "octocat@example.com", "audience": ["mediatore"],
+        "provider": "github", "providerId": "octocat", "avatar": "https://github.com/octocat.png",
         "groups": ["sandbox-users", "platform", "anthropic-api"], "issuedAt": t, "expiresAt": t + 3600,
         "claimNames": ["aud", "email", "email_verified", "exp", "groups", "iat", "iss", "name", "preferred_username", "sub"],
         "fingerprint": "4f1c09a2be77d3e0"}}));
@@ -314,6 +353,7 @@ pub async fn run(r: Arc<Run>, login: LoginSettings) {
         Some(first.clone()),
     );
     r.track(None, Some(first));
+    egress(&r, 2);
     let mut kube = sealed.clone();
     kube.push(segment_secret());
     world.custody(&r, Some(&obj), &kube, false, false, vm);
@@ -328,6 +368,7 @@ pub async fn run(r: Arc<Run>, login: LoginSettings) {
         "slept 10 s, exiting".into(),
         Some(now()),
     );
+    egress(&r, 4);
     pause(600).await;
 
     // 6. The exit, then the release.
@@ -351,4 +392,20 @@ pub async fn run(r: Arc<Run>, login: LoginSettings) {
     r.done(Step::Run, "workload exit code 0");
     r.state(Step::Exit, State::Done, Some("exit code 0".into()));
     r.finish(true, "exit code 0 (demo)".into());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pace_defaults_to_one_and_is_bounded() {
+        assert!((parse_pace(None) - 1.0).abs() < f64::EPSILON);
+        assert!((parse_pace(Some("nonsense")) - 1.0).abs() < f64::EPSILON);
+        assert!((parse_pace(Some("NaN")) - 1.0).abs() < f64::EPSILON);
+        assert!((parse_pace(Some(" 2.5 ")) - 2.5).abs() < f64::EPSILON);
+        assert!((parse_pace(Some("100")) - 10.0).abs() < f64::EPSILON);
+        assert!((parse_pace(Some("0")) - 0.1).abs() < f64::EPSILON);
+        assert_eq!(paced(1200, 2.5), 3000);
+    }
 }

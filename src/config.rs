@@ -1,21 +1,58 @@
-// Copyright (c) 2026 Erick Bourgeois, Low Tide
+// Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
 //! The config file: `KEY=VALUE` lines in the mediatore CLI's own environment variables
-//! (`MEDIATORE_ISSUER`, `MEDIATORE_URL`, `MEDIATORE_CA_FILE`, ...) and Low Tide's
-//! (`LOW_TIDE_*`), so one file serves both and nothing is spelled twice. It only fills what
+//! (`MEDIATORE_ISSUER`, `MEDIATORE_URL`, `MEDIATORE_CA_FILE`, ...) and Recess's
+//! (`RECESS_*`), so one file serves both and nothing is spelled twice. It only fills what
 //! the environment leaves unset: a flag beats the environment, the environment beats the file,
 //! the file beats the built-in default.
 //!
-//! Where: `--config <path>`, else `LOW_TIDE_CONFIG`, else
-//! `$XDG_CONFIG_HOME/low-tide/config.env` (`~/.config/low-tide/config.env`). A missing default
+//! Where: `--config <path>`, else `RECESS_CONFIG`, else
+//! `$XDG_CONFIG_HOME/recess/config.env` (`~/.config/recess/config.env`). A missing default
 //! file is fine; a missing file that was named is an error.
 
 use std::path::{Path, PathBuf};
 
-/// The keys the file may set: the CLI's, Low Tide's, and the kubeconfig.
+/// The keys the file may set: the CLI's, Recess's, and the kubeconfig. `LOW_TIDE_*`, the
+/// names from before the rename, are still read, as their `RECESS_*` twins.
 fn allowed(key: &str) -> bool {
-    key.starts_with("MEDIATORE_") || key.starts_with("LOW_TIDE_") || key == "KUBECONFIG"
+    key.starts_with("MEDIATORE_")
+        || key.starts_with("RECESS_")
+        || key.starts_with(LEGACY)
+        || key == "KUBECONFIG"
+}
+
+/// The prefix Recess's variables had while it was called Low Tide.
+const LEGACY: &str = "LOW_TIDE_";
+
+/// A `LOW_TIDE_*` name as its `RECESS_*` twin; any other name as it is.
+#[must_use]
+pub fn current_name(key: &str) -> String {
+    key.strip_prefix(LEGACY)
+        .map_or_else(|| key.to_owned(), |rest| format!("RECESS_{rest}"))
+}
+
+/// Give every `LOW_TIDE_*` variable of the environment to its `RECESS_*` twin when that is
+/// unset, so a shell or a launcher set up before the rename keeps working. Returns the names
+/// it carried over.
+///
+/// # Safety
+/// Calls `std::env::set_var`: call it before any other thread exists, as `main` does.
+pub unsafe fn adopt_legacy_env() -> Vec<String> {
+    let legacy: Vec<(String, std::ffi::OsString)> = std::env::vars_os()
+        .filter_map(|(k, v)| k.into_string().ok().map(|k| (k, v)))
+        .filter(|(k, _)| k.starts_with(LEGACY))
+        .collect();
+    let mut adopted = Vec::new();
+    for (k, v) in legacy {
+        let twin = current_name(&k);
+        if std::env::var_os(&twin).is_none_or(|x| x.is_empty()) {
+            // SAFETY: the caller guarantees no other thread exists yet.
+            unsafe { std::env::set_var(&twin, v) };
+            adopted.push(k);
+        }
+    }
+    adopted
 }
 
 /// One parsed file: the pairs it sets, in order, and the lines it ignored (with why).
@@ -50,7 +87,7 @@ pub fn parse(text: &str) -> Parsed {
         if !allowed(k) {
             out.ignored.push((
                 n,
-                format!("{k} is not a MEDIATORE_*, LOW_TIDE_* or KUBECONFIG key"),
+                format!("{k} is not a MEDIATORE_*, RECESS_* (or LOW_TIDE_*) or KUBECONFIG key"),
             ));
             continue;
         }
@@ -76,17 +113,24 @@ pub fn default_path() -> Option<PathBuf> {
         Some(d) if !d.is_empty() => PathBuf::from(d),
         _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
     };
-    Some(base.join("low-tide").join("config.env"))
+    let current = base.join("recess").join("config.env");
+    // Before the rename the file lived under low-tide: still read when there is no new one.
+    let legacy = base.join("low-tide").join("config.env");
+    Some(if !current.exists() && legacy.exists() {
+        legacy
+    } else {
+        current
+    })
 }
 
-/// Which file to read: `--config`, else `LOW_TIDE_CONFIG`, else the default; and whether it
+/// Which file to read: `--config`, else `RECESS_CONFIG`, else the default; and whether it
 /// was named (a named file must exist).
 #[must_use]
 pub fn choose(flag: Option<PathBuf>) -> Option<(PathBuf, bool)> {
     if let Some(p) = flag {
         return Some((p, true));
     }
-    match std::env::var_os("LOW_TIDE_CONFIG") {
+    match std::env::var_os("RECESS_CONFIG") {
         Some(p) if !p.is_empty() => Some((PathBuf::from(p), true)),
         _ => default_path().map(|p| (p, false)),
     }
@@ -108,7 +152,7 @@ pub fn flag_from_args(args: &[String]) -> Option<PathBuf> {
     None
 }
 
-/// What loading did, for `low-tide config` and the web page's hint.
+/// What loading did, for `recess config` and the web page's hint.
 #[derive(Debug, Default, Clone)]
 pub struct Loaded {
     pub path: Option<PathBuf>,
@@ -117,6 +161,8 @@ pub struct Loaded {
     pub set: Vec<String>,
     /// Keys the file had but the environment already set.
     pub shadowed: Vec<String>,
+    /// `LOW_TIDE_*` names read as their `RECESS_*` twins (the file's and the environment's).
+    pub legacy: Vec<String>,
     pub ignored: Vec<(usize, String)>,
 }
 
@@ -150,6 +196,11 @@ pub unsafe fn load(chosen: Option<(PathBuf, bool)>) -> anyhow::Result<Loaded> {
         ..Loaded::default()
     };
     for (k, v) in parsed.pairs {
+        let named = k;
+        let k = current_name(&named);
+        if k != named {
+            loaded.legacy.push(named);
+        }
         if std::env::var_os(&k).is_some_and(|x| !x.is_empty()) {
             loaded.shadowed.push(k);
         } else {
@@ -161,8 +212,8 @@ pub unsafe fn load(chosen: Option<(PathBuf, bool)>) -> anyhow::Result<Loaded> {
     Ok(loaded)
 }
 
-/// The template `low-tide config init` writes.
-pub const TEMPLATE: &str = r#"# Low Tide config: KEY=VALUE, the mediatore CLI's own variables plus LOW_TIDE_*.
+/// The template `recess config init` writes.
+pub const TEMPLATE: &str = r#"# Recess config: KEY=VALUE, the mediatore CLI's own variables plus RECESS_*.
 # A flag beats the environment, the environment beats this file. Lists are comma-separated;
 # booleans are true unless empty, 0, false, no or off.
 # Never put a token or a secret here: the login keeps those in the session file.
@@ -171,44 +222,46 @@ pub const TEMPLATE: &str = r#"# Low Tide config: KEY=VALUE, the mediatore CLI's 
 #MEDIATORE_ISSUER=https://dex.example.com
 #MEDIATORE_CLIENT_ID=mediatore
 #MEDIATORE_CA_FILE=/path/to/ca.pem
-#LOW_TIDE_SCOPES=openid,profile,email,groups,offline_access
-#LOW_TIDE_AUTH_PARAMS=prompt=consent
-#LOW_TIDE_LOGIN_HINT=
-#LOW_TIDE_CLIENT_SECRET_FILE=
-#LOW_TIDE_REDIRECT_PORTS=8000,18000
-#LOW_TIDE_REDIRECT_HOST=localhost
-#LOW_TIDE_REDIRECT_PATH=
-#LOW_TIDE_NO_BROWSER=false
-#LOW_TIDE_REUSE_SESSION=false
+#RECESS_SCOPES=openid,profile,email,groups,offline_access
+#RECESS_AUTH_PARAMS=prompt=consent
+#RECESS_LOGIN_HINT=
+#RECESS_CLIENT_SECRET_FILE=
+#RECESS_REDIRECT_PORTS=8000,18000
+#RECESS_REDIRECT_HOST=localhost
+#RECESS_REDIRECT_PATH=
+#RECESS_NO_BROWSER=false
+#RECESS_REUSE_SESSION=false
 #MEDIATORE_SESSION=/path/to/session.json
 
 # mediatore sandbox create
 #MEDIATORE_URL=https://mediatore.example.com
 #MEDIATORE_ALLOW_PLAIN_HTTP=false
 #MEDIATORE_NAMESPACE=sandboxes
-#LOW_TIDE_POOL=
-#LOW_TIDE_POOL_SELECTOR=
-#LOW_TIDE_STRATEGY=
-#LOW_TIDE_TTL=3600
-#LOW_TIDE_AUDIENCES=
-#LOW_TIDE_DELEGATE=
-#LOW_TIDE_POLICY=
-#LOW_TIDE_RESTART=never
-#LOW_TIDE_NO_LOGS=false
+#RECESS_POOL=
+#RECESS_POOL_SELECTOR=
+#RECESS_STRATEGY=
+#RECESS_TTL=3600
+#RECESS_AUDIENCES=
+#RECESS_DELEGATE=
+#RECESS_POLICY=
+#RECESS_RESTART=never
+#RECESS_NO_LOGS=false
 # The workload the form starts with: an image from a registry the pool reaches.
-#LOW_TIDE_WORKLOAD=registry.internal:5000/library/python:3.13-slim python3 -u -c "print('hello world')"
+#RECESS_WORKLOAD=registry.internal:5000/library/python:3.13-slim python3 -u -c "print('hello world')"
 
 # Where to watch, and the server
 #KUBECONFIG=/path/to/kubeconfig
-#LOW_TIDE_CONTEXT=
-#LOW_TIDE_BROKER_NAMESPACE=banlieue-system
-#LOW_TIDE_GATEWAY_SELECTOR=mediatore.io/role=gateway
-#LOW_TIDE_GATEWAY_NAMESPACE=
-#LOW_TIDE_GATEWAY_PREFIX=gateway-
-#LOW_TIDE_NO_GATEWAYS=false
-#LOW_TIDE_LISTEN=127.0.0.1:7480
-#LOW_TIDE_NO_OPEN=false
-#LOW_TIDE_DEMO=false
+#RECESS_CONTEXT=
+#RECESS_BROKER_NAMESPACE=banlieue-system
+#RECESS_GATEWAY_SELECTOR=mediatore.io/role=gateway
+#RECESS_GATEWAY_NAMESPACE=
+#RECESS_GATEWAY_PREFIX=gateway-
+#RECESS_NO_GATEWAYS=false
+#RECESS_LISTEN=127.0.0.1:7480
+#RECESS_THEME=classic
+#RECESS_NO_OPEN=false
+#RECESS_DEMO=false
+#RECESS_DEMO_PACE=1
 "#;
 
 /// Write the template at `path`, never over an existing file.
@@ -229,13 +282,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn names_from_before_the_rename_are_read_as_their_recess_twins() {
+        assert_eq!(current_name("LOW_TIDE_TTL"), "RECESS_TTL");
+        assert_eq!(current_name("RECESS_TTL"), "RECESS_TTL");
+        assert_eq!(current_name("MEDIATORE_URL"), "MEDIATORE_URL");
+        let p = parse("LOW_TIDE_POOL=sandbox-pool\nRECESS_TTL=600\nOTHER=x\n");
+        assert_eq!(
+            p.pairs,
+            [
+                ("LOW_TIDE_POOL".to_owned(), "sandbox-pool".to_owned()),
+                ("RECESS_TTL".to_owned(), "600".to_owned())
+            ],
+            "a LOW_TIDE_ key is allowed in the file (load gives it to its RECESS_ twin)"
+        );
+        assert_eq!(p.ignored.len(), 1);
+    }
+
+    #[test]
     fn parses_the_cli_variables_and_ignores_the_rest() {
         let p = parse(
             "# comment\n\
              \n\
              MEDIATORE_ISSUER=https://dex.example.com\n\
              export MEDIATORE_URL = \"https://mediatore.example.com\"\n\
-             LOW_TIDE_WORKLOAD='img python3 -c \"print(1)\"'\n\
+             RECESS_WORKLOAD='img python3 -c \"print(1)\"'\n\
              MEDIATORE_NAMESPACE=sandboxes # trailing comment\n\
              HOME=/tmp\n\
              not a pair\n\
@@ -250,7 +320,7 @@ mod tests {
                     "https://mediatore.example.com".into()
                 ),
                 (
-                    "LOW_TIDE_WORKLOAD".into(),
+                    "RECESS_WORKLOAD".into(),
                     r#"img python3 -c "print(1)""#.into()
                 ),
                 ("MEDIATORE_NAMESPACE".into(), "sandboxes".into()),
@@ -264,14 +334,14 @@ mod tests {
     fn the_config_flag_is_read_before_clap() {
         let a = |v: &[&str]| v.iter().map(ToString::to_string).collect::<Vec<_>>();
         assert_eq!(
-            flag_from_args(&a(&["low-tide", "--config", "/x", "web"])),
+            flag_from_args(&a(&["recess", "--config", "/x", "web"])),
             Some(PathBuf::from("/x"))
         );
         assert_eq!(
-            flag_from_args(&a(&["low-tide", "web", "--config=/y"])),
+            flag_from_args(&a(&["recess", "web", "--config=/y"])),
             Some(PathBuf::from("/y"))
         );
-        assert_eq!(flag_from_args(&a(&["low-tide", "web"])), None);
+        assert_eq!(flag_from_args(&a(&["recess", "web"])), None);
     }
 
     #[test]

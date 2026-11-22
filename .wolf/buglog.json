@@ -206,6 +206,21 @@
         "src/tui.rs",
         "assets/app.js"
       ]
+    },
+    {
+      "id": "bug-015",
+      "date": "2026-11-22",
+      "error_message": "live web-3d run: no gateway checks shown (no fuchsia tier, gateway edges dashed) though the broker logged them for the claim",
+      "root_cause": "watch_egress took the claim uid from the POST /v1/claims answer, which is None until the broker creates the claim; an empty uid returned at once. The demo always has the uid, so it hid this.",
+      "fix": "watch_egress reads the uid from the AgentSandbox's status.claimUid (the shared latest object) until it is known, then reads the broker log",
+      "tags": [
+        "web-3d",
+        "egress",
+        "live-only"
+      ],
+      "files": [
+        "src/engine.rs"
+      ]
     }
   ]
 }

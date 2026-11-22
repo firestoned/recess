@@ -12,13 +12,13 @@ budget_tokens: 2000
 
 <!-- How the user likes things done. Code style, tools, patterns, communication. -->
 
-- Low Tide must follow the mediatore CLI's process in order: `mediatore login` first (its form carries every CLI option, issuer required), then `mediatore sandbox create` (the workload), then seal, run, output, exit. Show the equivalent CLI command for each.
+- Recess must follow the mediatore CLI's process in order: `mediatore login` first (its form carries every CLI option, issuer required), then `mediatore sandbox create` (the workload), then seal, run, output, exit. Show the equivalent CLI command for each.
 - Visual, sleek web UI: stage cards with connectors that draw and darken as the run passes; the TUI mirrors the web flow.
 - Secrets in red with where they live; a lock superscript when sealed at rest; RAM when memory-only. Show IP addresses (sandbox VM, gateways).
 - Default workload: python:3.13-slim printing hello world, sleeping, printing again. The jail step is named "nsjail enter → jail-exec → exec" (the guest never calls nsenter).
 - "Full build" means a GitHub Actions `build.yaml`, Makefile-driven, firestoned/github-actions composites, SHA-pinned (mediatore's conventions).
 - Web layout: one stage in focus; a completed card shrinks left into a rail node and the next pops up; hover a node for a tooltip, click to bring it back into focus.
-- Config: a dotenv file using the mediatore CLI's own env var names (MEDIATORE_ISSUER, MEDIATORE_URL, ...) plus LOW_TIDE_*; flag > env > file.
+- Config: a dotenv file using the mediatore CLI's own env var names (MEDIATORE_ISSUER, MEDIATORE_URL, ...) plus RECESS_*; flag > env > file.
 - A 🔒 beside anything authorized or encrypted (stage boxes top right, rail names, sub-steps, URLs, network nodes), only once it has happened, with a tooltip saying what.
 - Rust, not Go: reuse mediatore's crates (mediatore-client, mediatore-proto) rather than shelling out.
 
@@ -31,7 +31,22 @@ budget_tokens: 2000
 - [2026-11-20] nsjail's RLIMIT_NOFILE default (32) is left in place by mediatore: parallel installers hit EMFILE. Use POETRY_INSTALLER_MAX_WORKERS=1; the test harness sets `ulimit -n 32` before jail-exec.
 - [2026-11-20] The jail has no writable /dev/shm: Python multiprocessing (SemLock) fails EACCES. Reproduce the real confinement on a Linux build host with `mediatore jail-exec --writable ... --connect-port N -- argv` (binary copied from the broker image) under setpriv, not with plain podman.
 
+- [2026-11-22] `web-3d` serves assets/3d.{html,js,css} on the same server and /api as `web` (Ui::Wire). The 3D is a hand-written canvas wireframe renderer (CSP allows only 'self'; no three.js). The director derives the act from run state (targetAct), so replays catch up; the demo stops on cancel without a `finished` event, so the page marks the run cancelled itself.
+
+- [2026-11-22] web-3d drill-down: every fact is tagged seen/reported/derived/by design/demo; TLS facts come from Recess's own handshake (/api/tls, broker or issuer only). mediatore does not report which gateway carried a tunnel: draw candidates, never guess (bug-012). `make record` rebuilds docs/media with placeholders only.
+
+- [2026-11-22] Renamed Low Tide to Recess ("when agents go to play"): crate and binary `recess`, `RECESS_*` variables, `~/.config/recess/config.env`. `LOW_TIDE_*` and the old path are still read (config::current_name, adopt_legacy_env), with one warning line; buglog.json keeps the old name as history.
+- [2026-11-22] Live gateway/audience attribution: the broker logs one `claim egress answered to the gateway claim_uid=…` per gateway check (cache miss), with no gateway name or host, and all gateways reach it from one NAT address. web-3d shows the count as tier activity; exact attribution needs mediatore to log the gateway and host.
+
+- [2026-11-22] After the rename, `target/*/low-tide` binaries lingered beside `target/*/recess` and showed the old "Low Tide" title; a rename of the package must also remove the old binaries.
+- [2026-11-22] One `web` subcommand: the page is picked by `?theme=` (classic, wired-3d), then the `recess-theme` cookie, then `--theme`/`RECESS_THEME`; `web-3d` is a hidden alias. The copy button (`copyButton`) lives in cli.js, shared by both pages.
+- [2026-11-22] `cargo update -p url` alone did not move past 2.5.8 (RUSTSEC-2026-0592); `--precise 2.5.9` did.
+- [2026-11-22] The live cluster's banlieue VMs carry no `status.attestationSubject`: the trust domain comes from the AgentSandbox's `status.record.nodeId` (`spiffe://<td>/spire/agent/tpm/<ek hash>`, whose hash is also the node SVID's). The VM's name and addresses fall back to the AgentSandbox's `status.virtualMachineRef` and `status.addresses` (3d.js `spiffeOf`, `vmOf`).
+
 ## Do-Not-Repeat
+
+- [2026-11-22] Changed src/util.rs and ran only `cargo test`; CI failed on `cargo fmt --check` (PR 4). Run `cargo fmt` (or `make check` on slate) after every Rust edit, not only after the first.
+- [2026-11-22] Stopped test servers with `pkill -f "recess web"`, which also matches the user's own running Recess. Stop only your own, by exact path and port.
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
 <!-- Format: [YYYY-MM-DD] Description of what went wrong and what to do instead. -->
