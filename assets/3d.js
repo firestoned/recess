@@ -52,6 +52,7 @@ const C = {
   seal: [251, 191, 36],
   ok: [74, 222, 128],
   carrier: [244, 114, 182],
+  policy: [251, 146, 60],
   bad: [248, 113, 113],
   dim: [52, 66, 90],
   ink: [219, 231, 245],
@@ -202,6 +203,9 @@ ST.vault = add(ST.api, [5.6, -1.0, 3.6]);
 // Sheet 02, mediatore sandbox create: its own place after the login, on the way to the broker.
 ST.form = [7.5, 0, -2];
 ST.cage = ST.vm;
+// The SandboxPolicy (notaio's signed bundle), above the road between the broker that reads it
+// and the API that holds the claim it governs.
+ST.policy = [17.5, 5.2, -16];
 
 // The legs, in journey order; p is how much of each is travelled (drawn solid).
 const LEGS = {
@@ -252,6 +256,19 @@ const SHAPES = {
     return moved(merge(moved(base, [0, 0, 0]), screen, inner, ...keys), [0, -0.7, 0]);
   })(),
   spark: octa(0.3),
+  // The SandboxPolicy: a sheet with a folded corner, its rules, and the signature's seal.
+  policyDoc: merge(
+    { pts: [[-0.8, 1.05, 0], [0.5, 1.05, 0], [0.8, 0.75, 0], [0.8, -1.05, 0], [-0.8, -1.05, 0]], edges: chain(5, true) },
+    { pts: [[0.5, 1.05, 0], [0.5, 0.75, 0], [0.8, 0.75, 0]], edges: chain(3) },
+    ...[0.55, 0.3, 0.05, -0.2].map((y, i) => ({ pts: [[-0.55, y, 0], [i === 3 ? 0.1 : 0.5, y, 0]], edges: [[0, 1]] })),
+    moved(ring(0.26, 20, 'xy'), [0.38, -0.66, 0]), moved(ring(0.14, 12, 'xy'), [0.38, -0.66, 0]),
+  ),
+  // An authorization checkpoint: a shield; a tick once it let the claim through, a cross if it
+  // refused it, a keyhole while it has not decided.
+  shield: { pts: [[-0.42, 0.5, 0], [0.42, 0.5, 0], [0.42, 0.05, 0], [0, -0.58, 0], [-0.42, 0.05, 0]], edges: chain(5, true) },
+  shieldIdle: merge(moved(ring(0.09, 10, 'xy'), [0, 0.12, 0]), { pts: [[0, 0.03, 0], [0, -0.2, 0]], edges: [[0, 1]] }),
+  shieldOk: { pts: [[-0.2, 0.02, 0], [-0.05, -0.16, 0], [0.22, 0.24, 0]], edges: chain(3) },
+  shieldBad: { pts: [[-0.17, 0.25, 0], [0.17, -0.12, 0], [0.17, 0.25, 0], [-0.17, -0.12, 0]], edges: [[0, 1], [2, 3]] },
 };
 
 // The parts that come and go with the run's data: one node per gateway, per audience the
@@ -271,6 +288,54 @@ function viaOf() { return model.data.seal.via ?? model.data.run.via ?? null; }
 // The claim's tunnels as the broker's log shows them: each gateway check of the claim.
 const egressOf = () => model.data.run.egress || {};
 const tierPos = () => mix(gwPos(0), gwPos(gwCount() - 1), 0.5);
+// The SandboxPolicy the claim names (spec.policyRef; mediatore has no default policy), and
+// what the AgentSandbox says of it: the bundle the record was written under, the reconciler's
+// PolicyConformant condition, and a refusal to resolve it.
+function policyOf() {
+  const w = model.data.create.workload || {}, obj = model.data.run.object || {}, st = obj.status || {}, rec = st.record || {};
+  const cond = (st.conditions || []).find((c) => c.type === 'PolicyConformant') || null;
+  return {
+    name: obj.spec?.policyRef?.name || w.policy || '',
+    seenName: !!obj.spec?.policyRef?.name,
+    uid: rec.policyUid || '', version: rec.bundleVersion || '', cond,
+    refused: /^policy_not_resolved/.test(st.reason || '') ? st.reason : '',
+  };
+}
+// The broker's refusal of the claim, when that is how the run ended.
+const claimRefusal = () => brokerError(model.finished?.note || '');
+// Where the claim is authorized, in the order it meets each place, and what each has decided
+// as far as Recess can see: 'ok', 'bad', 'gaps' (shadow mode: allowed, but enforce would not),
+// or 'pending'.
+function authzPoints() {
+  const claim = model.data.create.claim || {}, obj = model.data.run.object || {}, pol = policyOf(), r = claimRefusal();
+  const eg = egressOf(), live = D.act >= 7;
+  const broker = r ? 'bad' : claim.name || obj.metadata?.uid ? 'ok' : 'pending';
+  const api = broker === 'bad' ? 'pending' : pol.refused ? 'bad' : pol.cond?.status === 'False' ? 'gaps' : obj.metadata?.uid ? 'ok' : 'pending';
+  const gw = (eg.checks || 0) > 0 ? 'ok' : 'pending';
+  return [
+    { id: 'authz-broker', name: 'Claim admission', at: add(ST.broker, [0, 2.9, 0]), state: broker, show: () => true },
+    { id: 'authz-api', name: 'Admission and reconcile', at: add(ST.api, [0, 2.4, 0]), state: api, show: () => true },
+    { id: 'authz-gw', name: 'Gateway authorizer', at: add(tierPos(), [0, -((gwCount() - 1) * 0.9 + 1.9), 0]), state: gw, show: () => live },
+  ];
+}
+const authzById = (id) => authzPoints().find((a) => a.id === id);
+// Every check on the claim's way, from mediatore's code and ADRs: where it runs, what it
+// compares, and how a refusal shows. `codes` match the broker's error, so a refusal marks
+// the check that made it.
+const AUTHZ_CHECKS = [
+  { at: 'authz-broker', what: 'Your ID token, and the issuer\'s groups the broker requires', how: '403 forbidden', codes: ['forbidden', 'unauthorized'] },
+  { at: 'authz-broker', what: 'The namespace: your groups against sandboxes.namespaces (ADR-0046)', how: '403; the broker logs "namespace decision"', codes: ['namespace_required', 'namespace_forbidden'] },
+  { at: 'authz-broker', what: 'Each audience is usable in the namespace (ADR-0053)', how: '400 unknown_audience', codes: ['unknown_audience'] },
+  { at: 'authz-broker', what: 'The policy grants each audience and the ttl fits its lease (policy.audiences: enforce)', how: '400 policy_required, unknown_policy, ttl_exceeds_policy; 503 policy_not_synced', codes: ['policy_required', 'unknown_policy', 'ttl_exceeds_policy', 'policy_not_synced'] },
+  { at: 'authz-broker', what: 'The image is from a registry the pool reaches', how: '400 unreachable_registry', codes: ['unreachable_registry'] },
+  { at: 'authz-broker', what: 'The policy named resolves in the namespace\'s policy sources (ADR-0054, policy.egress: enforce; shadow only logs)', how: '400 policy_not_resolved', codes: ['policy_not_resolved'] },
+  { at: 'authz-api', what: 'Kubernetes admission (CEL): spec.subject.id is the caller, the spec is immutable, only the broker writes status', how: 'the API server refuses the write', codes: [] },
+  { at: 'authz-api', what: 'The reconciler (in the broker): a verified bundle for the policy, and the sandbox against it', how: 'status.reason policy_not_resolved; the PolicyConformant condition (shadow: gaps P001 to P012)', codes: [] },
+  { at: 'authz-gw', what: 'Each tunnel: the host against the claim\'s allowlist (its audiences\' endpoints, and the bundle\'s direct egress under ADR-0030 enforce)', how: 'the tunnel is refused; the gateway logs "tunnel" with verdict deny', codes: [] },
+  { at: 'authz-gw', what: 'Each credential the proxy asks to place: the policy admits the audience', how: 'the inject is refused; the broker logs "gateway credential refused"', codes: [], unseen: true },
+  { at: 'authz-broker', what: 'The guest\'s token requests, for as long as the claim lives', how: '403 claim revoked or expired', codes: [], unseen: true },
+];
+const AUTHZ_COLOR = { ok: 'ok', bad: 'bad', gaps: 'seal', pending: 'dim' };
 // Where this claim's traffic left by, once any is seen: the carrier, else the tier. Null before.
 const egressTo = () => ((egressOf().checks || 0) > 0 ? (carrierIdx() >= 0 ? gwPos(carrierIdx()) : tierPos()) : null);
 function carrierIdx() {
@@ -906,6 +971,19 @@ function drawStations() {
     draw(ring(0.55, 24), ST.cage, C.wire, fx.spark * 0.6, { rx: t * 1.7, ry: t });
   }
 
+  // The SandboxPolicy, and the one edge it has: the broker reads its signed bundle.
+  const pol = policyOf(), pface = Math.atan2(cam.pos[0] - ST.policy[0], cam.pos[2] - ST.policy[2]);
+  draw(SHAPES.policyDoc, ST.policy, C.policy, pol.name ? 0.95 : 0.3, { ry: pface + Math.sin(t * 0.5) * 0.15, scale: 1.1 });
+  if (pol.name && act >= 4) lines([add(ST.policy, [0, -1.2, 0]), add(ST.broker, [0, 1.2, 0])], [[0, 1]], C.policy, 0.4, 1, { glow: false });
+  // The authorization checkpoints, facing the camera.
+  for (const a of authzPoints()) {
+    if (!a.show()) continue;
+    const col = C[AUTHZ_COLOR[a.state]], f = Math.atan2(cam.pos[0] - a.at[0], cam.pos[2] - a.at[2]);
+    const al = a.state === 'pending' ? 0.55 : 1, sel = view.sel?.id === a.id ? 1.25 : 1;
+    draw(SHAPES.shield, a.at, a.state === 'pending' ? C.ink : col, al, { ry: f, scale: sel, width: a.state === 'pending' ? 1 : 1.5 });
+    draw(a.state === 'ok' ? SHAPES.shieldOk : a.state === 'bad' ? SHAPES.shieldBad : SHAPES.shieldIdle, a.at, a.state === 'pending' ? C.ink : col, al, { ry: f, scale: sel, width: 1.5 });
+  }
+
   // The end: a ring, and the exit code in it.
   // The end faces the camera, so the exit code reads from wherever it is orbited to.
   const face = Math.atan2(cam.pos[0] - ST.end[0], cam.pos[2] - ST.end[2]);
@@ -1129,6 +1207,10 @@ const NODES = [
     show: () => i < audList().length && D.act >= 7,
   })),
   { id: 'end', name: () => 'Exit', at: () => ST.end, r: 2.8, off: [-3, 3, 12], show: always },
+  { id: 'policy', name: () => 'SandboxPolicy', at: () => ST.policy, r: 1.4, off: [-2.5, 2, 9], show: always },
+  ...['authz-broker', 'authz-api', 'authz-gw'].map((id) => ({
+    id, name: () => `Authz: ${authzById(id).name}`, at: () => authzById(id).at, r: 0.6, off: [-1.8, 1.4, 7], show: () => authzById(id).show(),
+  })),
 ];
 const legPts = (leg) => Array.from({ length: 41 }, (_, i) => legAt(leg, i / 40));
 const EDGES = [
@@ -1141,6 +1223,7 @@ const EDGES = [
   { id: 'tunnel', name: 'Proxy → gateway', pts: () => [PROXY, egressTo() || tierPos()], show: () => D.act >= 7 && gwList().length > 0 },
   { id: 'upstream', name: 'Gateway → audience', pts: () => audList().length ? [egressTo() || tierPos(), audPos(0)] : [], show: () => D.act >= 7 && audList().length > 0 },
   { id: 'end', name: 'VM → exit', pts: () => legPts(LEGS.end), show: always },
+  { id: 'bundle', name: 'Policy → broker', pts: () => [add(ST.policy, [0, -1.2, 0]), add(ST.broker, [0, 1.2, 0])], show: () => !!policyOf().name && D.act >= 4 },
 ];
 const nodeById = (id) => NODES.find((n) => n.id === id);
 const edgeById = (id) => EDGES.find((e) => e.id === id);
@@ -1333,6 +1416,8 @@ L.vault.show = () => D.act >= 5 && vault.open < 0.4;
 L.api.show = () => vault.open < 0.4;
 L.broker.show = () => vault.open < 0.4;
 L.you.show = () => D.act >= 4 && !CARDS.you.shown;
+L.policy = label(add(ST.policy, [1.3, 1.1, 0]), 'policy', 'policy');
+const AUTHZL = ['authz-broker', 'authz-api', 'authz-gw'].map((id) => Object.assign(label(() => add(authzById(id).at, [0.55, 0.35, 0]), 'authz', id), { id, show: () => authzById(id).show() && (near(authzById(id).at, 16, id) || authzById(id).state === 'bad') }));
 L.form = Object.assign(label(add(ST.form, [2.2, 1.6, 0]), '', 'form'), { show: () => D.act >= 4 && !CARDS.form.shown });
 L.you.lit = () => true;
 
@@ -1369,6 +1454,14 @@ function updateLabels() {
   setLabel(L.env, claim.name ? `claim ${claim.name}` : 'claim', `as ${who()}`);
   setLabel(L.you, 'You', who('this laptop'));
   setLabel(L.form, 'sandbox create', 'sheet 02');
+  const pol = policyOf();
+  setLabel(L.policy, 'SandboxPolicy', pol.name ? pol.name + (pol.version ? ` · bundle ${pol.version}` : '') : 'none named');
+  const said = { ok: 'allowed', bad: 'refused', gaps: 'allowed, with gaps', pending: 'not yet' };
+  for (const l of AUTHZL) {
+    const a = authzById(l.id);
+    setLabel(l, `authz · ${a.name}`, said[a.state]);
+    for (const k of ['ok', 'bad', 'gaps']) l.el.classList.toggle(k, a.state === k);
+  }
 }
 
 // ------------------------------------------------------------------------------ the two cards
@@ -1731,8 +1824,10 @@ const pre = (text) => (text ? el('pre', null, text) : el('p', 'empty', 'not run 
 // Which stage each node and edge belongs to, for its state.
 function stepOf(sel) {
   const id = sel.id;
-  if (sel.kind === 'edge') return { login: 'mint', form: 'create', broker: 'create', api: 'create', vm: 'run', jail: 'run', tunnel: 'run', upstream: 'run', end: 'exit' }[id];
+  if (sel.kind === 'edge') return { login: 'mint', form: 'create', broker: 'create', api: 'create', vm: 'run', jail: 'run', tunnel: 'run', upstream: 'run', end: 'exit', bundle: 'create' }[id];
   if (id.startsWith('box')) return 'seal';
+  if (id === 'authz-gw') return 'run';
+  if (id === 'policy' || id.startsWith('authz')) return 'create';
   if (id.startsWith('gw') || id.startsWith('aud')) return 'run';
   return { you: 'mint', form: 'create', issuer: 'mint', broker: 'create', api: 'create', vault: 'seal', vm: 'run', guest: 'run', proxy: 'run', cage: 'run', end: 'exit' }[id];
 }
@@ -1877,6 +1972,37 @@ function spiffeOf() {
 
 // ---- what each node and edge is, from the top down
 
+// The checks, as a list: every one, or those at one place; each marked as Recess sees it.
+function authzList(at) {
+  const r = claimRefusal(), state = Object.fromEntries(authzPoints().map((a) => [a.id, a.state]));
+  // A refusal the broker named marks its check; the checks before it passed, those after it
+  // were never reached.
+  const hitAt = r ? AUTHZ_CHECKS.findIndex((c) => c.codes.includes(r.error)) : -1;
+  const rows = AUTHZ_CHECKS.map((c, i) => ({ c, i })).filter(({ c }) => !at || c.at === at).map(({ c, i }) => {
+    const hit = i === hitAt;
+    // Some outcomes never reach Recess: those are not marked passed just because the run went on.
+    const st = hit ? 'bad' : hitAt >= 0 ? (i < hitAt ? 'ok' : 'skipped') : c.unseen ? 'unseen' : state[c.at];
+    return { c, st };
+  });
+  const where = { 'authz-broker': 'broker', 'authz-api': 'Kubernetes API', 'authz-gw': 'gateway' };
+  const mark = { ok: 'passed', bad: 'refused', gaps: 'passed, with gaps', pending: 'not yet', unseen: 'not reported to you', skipped: 'not reached' };
+  return list(rows, ({ c, st }) => [`${c.what}  [${r && st === 'bad' && c.codes.includes(r.error) ? r.error : mark[st]}]`, `${at ? '' : where[c.at] + ' · '}on refusal: ${c.how}`, st === 'ok' ? 'ok' : st === 'bad' ? 'bad' : st === 'gaps' ? 'live' : '']);
+}
+function authzPanel(id, summary) {
+  const a = authzById(id), r = claimRefusal(), pol = policyOf(), eg = egressOf();
+  const evidence = {
+    'authz-broker': [['decision', r ? `${r.status} ${r.error}` : a.state === 'ok' ? 'the claim was taken' : null, 'seen'], ['detail', r?.detail, 'seen'], ['policy named', pol.name || 'none', pol.seenName ? 'seen' : 'reported']],
+    'authz-api': [['AgentSandbox', model.data.run.object?.metadata?.uid ? 'admitted' : null, 'seen'], ['PolicyConformant', pol.cond ? `${pol.cond.status} (${pol.cond.reason || ''})` : null, 'seen'], ['refused', pol.refused, 'seen'], ['bundle in the record', pol.version, 'seen']],
+    'authz-gw': [['tunnels allowed', eg.checks || null, eg.source === 'demo' ? 'reported' : 'seen'], ['denials', 'not reported to you: the gateway logs them, and ADR-0062 sends them to the broker', 'design']],
+  }[id];
+  return {
+    title: `Authz: ${a.name}`, summary,
+    glance: [['state', { ok: 'allowed', bad: 'refused', gaps: 'allowed, with gaps (shadow)', pending: 'not decided yet' }[a.state], 'seen'], ...evidence],
+    sections: [['The checks here, in order', authzList(id)]],
+    raw: null,
+  };
+}
+
 function describe(sel) {
   const d = model.data, n = model.notes, id = d.mint.identity || {}, se = d.mint.session || {};
   const w = d.create.workload || {}, claim = d.create.claim || {}, obj = d.run.object || {};
@@ -1987,6 +2113,30 @@ function describe(sel) {
       ],
       raw: { workload: w, claim, tls: tlsSeen.broker.data },
     }),
+    policy: () => {
+      const pol = policyOf(), c = pol.cond;
+      return {
+        title: 'SandboxPolicy', summary: 'notaio\'s policy, named by the claim in spec.policyRef. notaio signs it into a bundle beside it; the broker verifies the bundle and authorizes by it. mediatore has no default policy: a claim that names none is held only to the broker\'s own checks.',
+        glance: [
+          ['name', pol.name || 'none named', pol.seenName ? 'seen' : 'reported'],
+          ['bundle version', pol.version, 'seen'], ['policy uid', pol.uid, 'seen'],
+          ['conformant', c ? `${c.status} (${c.reason || ''})${c.message ? ': ' + c.message : ''}` : null, 'seen'],
+          ['refused', pol.refused, 'seen'],
+        ],
+        sections: [
+          ['Where the claim is authorized, in order', authzList(null)],
+          ['The signed bundle', stack([
+            layer('ConfigMap', `${pol.name || '<policy>'}-bundle, in the policy's namespace`, [['managed by', 'notaio', 'design'], ['envelope', 'bundle.dsse.json (DSSE), checked against the broker\'s trusted keys', 'design'], ['fresh for', 'about 15 minutes (notAfter); notaio re-signs it', 'design']]),
+            layer('Content', 'what the broker reads', [['audiences', 'name, ttlSeconds, rules, endpoints', 'design'], ['lease', 'maxDurationSeconds', 'design'], ['egress', 'direct host:port the claim may reach (ADR-0030)', 'design']]),
+          ])],
+          ['Not in the policy', facts([['images', 'the registries the pool reaches: broker config', 'design'], ['pools', 'broker config', 'design'], ['who may claim where', 'the namespace\'s groups: broker config (ADR-0046)', 'design']])],
+        ],
+        raw: { policyRef: pol.name ? { name: pol.name } : null, record: { policyUid: pol.uid || null, bundleVersion: pol.version || null }, condition: c, reason: pol.refused || null },
+      };
+    },
+    'authz-broker': () => authzPanel('authz-broker', 'The broker decides whether to take the claim at all, at POST /v1/claims, before anything is written: who you are, where, what for, under which policy. A refusal comes back to you as the broker\'s error, and nothing is created.'),
+    'authz-api': () => authzPanel('authz-api', 'Kubernetes admits the AgentSandbox the broker writes, and the broker\'s reconciler then holds it to the policy: a bundle it has verified, and the sandbox measured against it.'),
+    'authz-gw': () => authzPanel('authz-gw', 'While the work runs, every tunnel out and every credential the proxy places is asked of the authorizer on the gateway, which asks the broker for the claim\'s egress. Decided per connection, never once for the run.'),
     api: () => ({
       title: 'Kubernetes API', summary: 'Holds the AgentSandbox, the claim\'s record, which the pool binds a VM to.',
       glance: [['AgentSandbox', obj.metadata?.name || claim.name, 'seen'], ['phase', obj.status?.phase || claim.phase, 'seen'], ['namespace', obj.metadata?.namespace || claim.namespace, 'seen']],
@@ -2142,6 +2292,10 @@ function describe(sel) {
     };
   }
   const edges = {
+    bundle: () => {
+      const pol = policyOf();
+      return { title: 'SandboxPolicy → broker', summary: 'The broker\'s bundle reflector, on every replica, reads the signed bundle, checks notaio\'s signature, and records the newest version it has taken (a PolicyFloor) so an older bundle is never taken back.', glance: [['policy', pol.name, pol.seenName ? 'seen' : 'reported'], ['bundle version', pol.version, 'seen']], sections: [['On the wire', stack([layer('Kubernetes API', 'watch ConfigMaps labelled app.kubernetes.io/managed-by=notaio', [['as', 'the broker\'s service account: get, list, watch in the policy namespaces', 'design']]), layer('DSSE', 'bundle.dsse.json', [['verified', 'against the broker\'s trusted keys; refused if unsigned, stale or older than the floor', 'design']])])]], raw: null };
+    },
     login: () => ({ title: 'You → OIDC issuer', summary: 'Your browser signs you in; Recess takes the code on its loopback redirect and gets the ID token.', glance: [['issuer', issuer, 'seen'], ['state', model.steps.mint, 'seen']], sections: [['On the wire', stack([layer('OIDC', 'authorization code with PKCE', [['redirect', 'http://localhost on loopback', 'design'], ['note', n.mint, 'seen']]), ...tlsLayers('issuer', 443)])]], raw: null }),
     form: () => ({ title: 'Login → sandbox create', summary: 'The session the login wrote is what create sends: your ID token, and the refresh token it delegates. Nothing leaves this laptop until POST /v1/claims.', glance: [['session', se.path, 'seen'], ['ID token', id.fingerprint, 'seen']], sections: [['Handed over', stack([layer('Session file', se.path, [['mode', se.mode, 'seen'], ['ID token', se.idTokenFresh == null ? null : se.idTokenFresh ? 'fresh' : 'expired', 'seen'], ['refresh token', se.refreshToken, 'seen']]), layer('On this laptop', 'one process, no network', [['crossing', 'none: Recess reads the session it wrote', 'design']])])]], raw: null }),
     broker: () => ({ title: 'You → broker', summary: 'POST /v1/claims: the workload, your ID token and any delegated credential, sent once.', glance: [['broker', Cl.url, 'seen'], ['claim', claim.name, 'seen']], sections: [['On the wire', stack([layer('HTTP', 'POST /v1/claims', [['auth', 'Bearer <your ID token>', 'design'], ['delegate', w.delegate, 'reported']]), ...tlsLayers('broker', 443)])], ['Command', pre(d.create.command)]], raw: null }),

@@ -317,3 +317,11 @@ input:disabled, textarea:disabled { color: var(--muted); }
 .lbl.carrier:not(.nopick) i { color: #f9a8d4; }
 .lbl.idle b { color: var(--muted); font-weight: 500; }
 .lbl.idle i { color: var(--faint); }
+
+/* The SandboxPolicy and the authorization checkpoints. */
+:root { --policy: #fb923c; }
+.lbl.policy b { color: var(--policy); }
+.lbl.authz b { color: var(--muted); }
+.lbl.authz.ok b { color: var(--ok); }
+.lbl.authz.gaps b { color: var(--seal); }
+.lbl.authz.bad b { color: var(--bad); }

@@ -261,7 +261,8 @@ pub async fn run(r: Arc<Run>, login: LoginSettings) {
             "creationTimestamp": created, "generation": 1, "finalizers": ["mediatore.io/release"],
             "labels": {"mediatore.io/claim-uid": CLAIM_UID}},
         "spec": {"subject": {"issuer": "https://dex.example.com", "id": "CgZvY3RvY2F0EgZnaXRodWI", "display": "octocat"},
-            "ttlSeconds": 3600, "workload": {"image": image, "args": args, "restart": "Never", "logs": true}},
+            "ttlSeconds": 3600, "policyRef": {"name": "default"},
+            "workload": {"image": image, "args": args, "restart": "Never", "logs": true}},
         "status": {"phase": "Pending"}
     });
     let mut prev = BTreeMap::new();
@@ -288,7 +289,10 @@ pub async fn run(r: Arc<Run>, login: LoginSettings) {
     obj["status"]["claimRef"] = json!({"name": "octocat-7k2qd"});
     obj["status"]["claimUid"] = json!(CLAIM_UID);
     obj["status"]["record"] = json!({"claimUid": CLAIM_UID, "sandboxUid": SANDBOX_UID, "createdAt": created,
-        "refresh": true, "delegations": [{"audience": "anthropic"}]});
+        "refresh": true, "delegations": [{"audience": "anthropic"}],
+        "policyUid": "5d0c1b2a-0000-4000-8000-00000000b001", "bundleVersion": 7});
+    obj["status"]["conditions"] = json!([{"type": "PolicyConformant", "status": "True", "reason": "Conformant",
+        "message": "the sandbox is within policy default, bundle 7", "lastTransitionTime": now()}]);
     push(&r, &obj, &mut prev);
     r.data(Step::Run, json!({"event": {"at": now(), "type": "Normal", "reason": "Claimed",
         "message": "VirtualMachineClaim created; waiting for a Ready member", "object": "AgentSandbox/octocat-7k2qd", "count": 1}}));
