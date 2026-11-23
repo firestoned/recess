@@ -63,6 +63,8 @@
 :root { --spire: #2dd4bf; }
 .lbl.pool b { color: var(--ok); font-size: 13px; letter-spacing: .18em; }
 .lbl.pool i { font-size: 11.5px; }
+.lbl.yard b { color: var(--muted); font-size: 11px; letter-spacing: .2em; }
+.lbl.yard i { font-size: 10.5px; }
 .lbl.vm b { font-size: 9px; }
 .lbl.vm.claimed b { color: var(--wire); }
 .lbl.vm.warm b { color: var(--ok); }

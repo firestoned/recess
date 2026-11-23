@@ -1,0 +1,113 @@
+# Copyright (c) 2026 Erick Bourgeois, Recess
+# SPDX-License-Identifier: Apache-2.0
+
+# Recess's documentation: MkDocs Material, dressed as Recess itself (a dark blueprint, cyan wire,
+# monospace capitals). The pages are the README and the repository's other documents, pulled in
+# with include-markdown so each has one source; hooks.py points their links at the right page.
+
+site_name: Recess
+site_url: https://firestoned.github.io/recess/
+site_description: Walk one workload through mediatore and watch each stage happen, in a browser or a terminal; and every live agent in the cluster, in the same theatre.
+site_author: Erick Bourgeois
+
+repo_url: https://github.com/firestoned/recess
+repo_name: firestoned/recess
+edit_uri: edit/main/
+
+docs_dir: src
+site_dir: site
+
+# A broken link or a missing page fails the build.
+strict: true
+
+copyright: Copyright &copy; 2026 Erick Bourgeois, Recess. Apache License 2.0.
+
+theme:
+  name: material
+  language: en
+  logo: assets/mark.svg
+  favicon: assets/mark.svg
+  # Dark only, as the app: its colours are in stylesheets/recess.css.
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: custom
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.path
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tooltips
+  icon:
+    repo: fontawesome/brands/github
+
+hooks:
+  - hooks.py
+
+plugins:
+  - search
+  # The README and the other documents, included where their sections belong. Their relative
+  # links are rewritten from the included file's place; hooks.py takes them from there.
+  - include-markdown
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - stylesheets/recess.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/firestoned/recess
+      name: Recess on GitHub
+
+nav:
+  - Home: index.md
+  - Views:
+      - AgentSandbox: agentsandbox.md
+      - Admin: admin.md
+      - Infrastructure layout: layout.md
+      - TUI: tui.md
+  - Run it:
+      - Configuration: configuration.md
+      - In a cluster: cluster.md
+      - Build: build.md
+  - Reference:
+      - Security: security.md
+      - Cross-references: cross-references.md
+  - Community:
+      - Contributing: contributing.md
+      - Code of Conduct: code-of-conduct.md
+      - Governance: governance.md
+      - Maintainers: maintainers.md
