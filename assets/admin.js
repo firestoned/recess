@@ -1406,17 +1406,11 @@ function bind() {
   let drag = null;
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
-    // Ctrl: move what is under the pointer (the layout, theatre.js).
-    if (e.ctrlKey && LAYOUT.editable) {
+    // A node in hand is let go by the window; Ctrl or Alt takes one (the layout, theatre.js).
+    if (HAND.m) return;
+    if (moveKey(e)) {
       const n = nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
-      const flat = !n || n.kind === 'agent' || n.kind === 'vm';
-      const m = key && beginMove(e.clientX, e.clientY, n.pos, moveUpright(e.shiftKey, flat));
-      if (m) {
-        drag = { move: m, key, moved: false };
-        view.touched = true;
-        canvas.setPointerCapture(e.pointerId);
-        canvas.classList.add('moving');
-      }
+      if (key && takeHold(e, key, n.pos, n.kind === 'agent' || n.kind === 'vm', (d) => { view.idle = 0; moveGroup(key, d); }, true)) view.touched = true;
       return;
     }
     drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, target: view.target.slice(), pan: e.button === 2 || e.shiftKey || e.metaKey, moved: false };
@@ -1425,15 +1419,11 @@ function bind() {
     view.idle = 0;
   });
   canvas.addEventListener('pointermove', (e) => {
+    if (HAND.m) return;
     if (!drag) {
       view.hover = pickAt(e.clientX, e.clientY);
       canvas.classList.toggle('pick', !!view.hover);
-      canvas.classList.toggle('movable', e.ctrlKey && LAYOUT.editable && !!view.hover && !!groupOf(nodes.get(view.hover)));
-      return;
-    }
-    if (drag.move) {
-      const d = drag.move.step(e.clientX, e.clientY);
-      if (len(d) > 0) { moveGroup(drag.key, d); drag.moved = true; }
+      canvas.classList.toggle('movable', moveKey(e) && !!view.hover && !!groupOf(nodes.get(view.hover)));
       return;
     }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
@@ -1450,8 +1440,7 @@ function bind() {
     }
   });
   const end = (e) => {
-    if (drag?.move) canvas.classList.remove('moving');
-    else if (drag && !drag.moved && e.type === 'pointerup') select(pickAt(e.clientX, e.clientY));
+    if (drag && !drag.moved && e.type === 'pointerup') select(pickAt(e.clientX, e.clientY));
     drag = null;
     canvas.classList.remove('dragging');
   };
@@ -1459,7 +1448,7 @@ function bind() {
   canvas.addEventListener('pointercancel', end);
   // Ctrl-double-click: back where the layout stands it.
   canvas.addEventListener('dblclick', (e) => {
-    const n = e.ctrlKey && LAYOUT.editable && nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
+    const n = moveKey(e) && performance.now() - HAND.dropped > 700 && nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
     if (key && LAYOUT.moved[key]) moveGroup(key, mul(LAYOUT.moved[key], -1));
   });
   canvas.addEventListener('wheel', (e) => {

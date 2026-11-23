@@ -154,7 +154,8 @@ gateway is a candidate, dashed, and the details say why; the demo's scripted wor
 | arrow keys | orbit |
 | `[` and `]` | the previous or next node |
 | Esc, "Follow live" | hand the camera back to the run |
-| Ctrl-drag | move a station: across the floor when looking down, upright when looking level (Shift swaps) |
+| Ctrl-drag or Option-drag | move a station: across the floor when looking down, upright when looking level (Shift swaps) |
+| Ctrl-click, then click | the same, carried: it follows the pointer to the second click; Esc puts it back |
 | Ctrl-double-click | put a moved station back |
 
 Moves are kept per view in `layout.json` beside `config.env` (`~/.config/recess/`), as offsets
