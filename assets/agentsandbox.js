@@ -14,7 +14,7 @@
 'use strict';
 
 // The renderer, the shapes and the infrastructure stations are the base theatre (theatre.js),
-// shared with the Watch view; this file adds the run's journey to it.
+// shared with the Admin view; this file adds the run's journey to it.
 
 // Seven-segment digits as lines: the exit code, drawn at the end of the journey.
 const SEGS = { a: [[0, 2], [1, 2]], b: [[1, 2], [1, 1]], c: [[1, 1], [1, 0]], d: [[0, 0], [1, 0]], e: [[0, 1], [0, 0]], f: [[0, 2], [0, 1]], g: [[0, 1], [1, 1]] };
@@ -2492,7 +2492,7 @@ async function init() {
   cfg = await (await fetch('/api/config')).json();
   cfg.login = cfg.login || {}; cfg.claim = cfg.claim || {};
   demo = !!cfg.demo;
-  if (demo) document.title = 'Recess Wired 3D (demo)';
+  if (demo) document.title = 'Recess AgentSandbox (demo)';
   // The sheets start from the server's settings (flags, environment, config file).
   fillForm(LOGIN_FORM, cfg.login);
   fillForm(CREATE_FORM, cfg.claim);

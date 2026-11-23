@@ -4,8 +4,8 @@
 // The base theatre both 3D views stand on: the small wireframe renderer (perspective, near-plane
 // clipping, depth fog, a glow pass, on a 2D canvas), the shapes, and the infrastructure every
 // claim passes through, in one place for both: the issuer, the broker, the Kubernetes API and its
-// Secrets vault, the SandboxPolicy, OpenBao and SPIRE. Wired 3D (3d.js) adds one run's journey
-// to it; Watch (watch.js) adds every live agent. Loaded first, as a classic script: what it
+// Secrets vault, the SandboxPolicy, OpenBao and SPIRE. AgentSandbox (agentsandbox.js) adds one run's
+// journey to it; Admin (admin.js) adds every live agent. Loaded first, as a classic script: what it
 // declares at the top level is shared with the view loaded after it.
 
 'use strict';

@@ -5,28 +5,28 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Recess Watch</title>
+  <title>Recess Admin</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/3d.css">
-  <link rel="stylesheet" href="/watch.css">
+  <link rel="stylesheet" href="/agentsandbox.css">
+  <link rel="stylesheet" href="/admin.css">
   <script src="/cli.js" defer></script>
   <script src="/theatre.js" defer></script>
-  <script src="/watch.js" defer></script>
+  <script src="/admin.js" defer></script>
 </head>
 <body>
   <canvas id="scene" aria-hidden="true"></canvas>
   <div id="labels" aria-hidden="true"></div>
 
   <header class="bar">
-    <div class="brand"><span class="mark" aria-hidden="true"></span>Recess <em>watch</em></div>
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Recess <em>admin</em></div>
     <div id="counts" class="counts" aria-label="Agents by state"></div>
     <div class="bar-right">
       <label class="view-pick" title="What the page shows; switching keeps your run">
         <span>View</span>
         <select id="view">
           <option value="classic">Classic</option>
-          <option value="wired-3d">Wired 3D</option>
-          <option value="watch" selected>Watch</option>
+          <option value="agentsandbox">AgentSandbox</option>
+          <option value="admin" selected>Admin</option>
         </select>
       </label>
       <input id="filter" class="filter" type="search" spellcheck="false" placeholder="filter: name, owner, namespace, host" aria-label="Filter agents">

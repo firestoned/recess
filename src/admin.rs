@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
-//! The watch page's data (`/watch`): every `AgentSandbox` the kubeconfig may list, the banlieue
+//! The admin page's data (`/admin`): every `AgentSandbox` the kubeconfig may list, the banlieue
 //! `VirtualMachine`s (the gateways and the pools' members), the `SandboxPolicy`s, and the
 //! gateways' decisions. Watched once for every viewer, from the first viewer on; each viewer gets
 //! the whole picture, then each change, over one server-sent event stream.
@@ -593,7 +593,7 @@ async fn read_decisions(fleet: Arc<Fleet>, client: kube::Client, broker_ns: Stri
 
 // ------------------------------------------------------------------------------ one sandbox's output
 
-/// One sandbox's output, for the watch page's Output tab: the broker's own stream
+/// One sandbox's output, for the admin page's Output tab: the broker's own stream
 /// (`GET /v1/claims/{name}/logs`, the last 1000 records then live), as the signed-in user.
 /// The broker lets only a sandbox's owner read it, so anyone else's is refused, and said so.
 /// Each item is one event for the page: `line`, `gap`, `header`, `end`, `closed` or `error`.
@@ -621,13 +621,13 @@ async fn open_output(
 ) -> Result<reqwest::Response, String> {
     let path = crate::engine::session_path().map_err(|e| format!("no mediatore session: {e}"))?;
     let session = mediatore_client::Session::load(&path).map_err(|_| {
-        "no mediatore session on this machine: sign in first (in the Classic or Wired 3D view); \
+        "no mediatore session on this machine: sign in first (in the Classic or AgentSandbox view); \
          the broker shows a sandbox's output only to its owner"
             .to_owned()
     })?;
     if !session.is_fresh(30) {
         return Err(
-            "your mediatore session has expired: sign in again (in the Classic or Wired 3D view)"
+            "your mediatore session has expired: sign in again (in the Classic or AgentSandbox view)"
                 .into(),
         );
     }

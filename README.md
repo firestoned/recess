@@ -5,10 +5,10 @@
 
 *When agents go to play.* (Formerly Low Tide.)
 
-![recess web, Wired 3D view: a request sealed into an envelope, carried through the broker, the Kubernetes API and the sandbox VM, then drilled into](docs/media/web-3d.gif)
+![recess web, AgentSandbox view: a request sealed into an envelope, carried through the broker, the Kubernetes API and the sandbox VM, then drilled into](docs/media/agentsandbox.gif)
 
-*`recess web --view wired-3d --demo`, at 2.2× speed. The whole tour at real speed:
-[docs/media/web-3d.mp4](docs/media/web-3d.mp4).*
+*`recess web --view agentsandbox --demo`, at 2.2× speed. The whole tour at real speed:
+[docs/media/agentsandbox.mp4](docs/media/agentsandbox.mp4).*
 
 Walk one workload through mediatore and watch each stage happen, in a browser or a terminal.
 The stages follow the `mediatore` CLI's process:
@@ -48,7 +48,7 @@ MEDIATORE_ISSUER=https://dex.example.com MEDIATORE_URL=https://mediatore.example
   ./target/release/recess web --namespace sandboxes
 
 # The same, opening on the wireframe 3D journey; the page's View menu switches either way.
-./target/release/recess web --view wired-3d --namespace sandboxes
+./target/release/recess web --view agentsandbox --namespace sandboxes
 
 # Every live agent in the cluster, read-only (also at /watch on any recess web).
 ./target/release/recess web --view watch
@@ -58,7 +58,7 @@ MEDIATORE_ISSUER=https://dex.example.com MEDIATORE_URL=https://mediatore.example
 
 # No cluster: a scripted run with placeholder values, for showing the flow.
 ./target/release/recess web --demo
-./target/release/recess web --view wired-3d --demo
+./target/release/recess web --view agentsandbox --demo
 ./target/release/recess web --view watch --demo
 ./target/release/recess tui --demo
 ```
@@ -86,13 +86,15 @@ in the session file, newest first, with how each ended (exit code, failure, stil
 ## The 3D page
 
 The View menu at the top of every page picks what it shows: **Classic** (your run as stage
-cards), **Wired 3D** (your run as a journey) or **Watch** (every live agent in the cluster).
+cards), **AgentSandbox** (your run as a 3D journey; `--view agentsandbox`) or **Admin**
+(every live agent in the cluster; `--view admin`, or `/admin`). The names they had before,
+`wired-3d` and `watch` (and `/watch`), are still accepted.
 They share the same API and guards, and your run lives on the server, so switching in the
 middle of a run reloads the page onto it; the choice is remembered, and `--view`
 (`RECESS_VIEW`; `--theme` and `RECESS_THEME` are its old names) sets the one a browser sees
 first. Both 3D views stand on one base theatre (`assets/theatre.js`): the renderer, the shapes,
 and the infrastructure in the same places, the issuer, the broker, the Kubernetes API and its
-Secrets vault, the SandboxPolicy, OpenBao and SPIRE. Wired 3D shows the run as a wireframe
+Secrets vault, the SandboxPolicy, OpenBao and SPIRE. AgentSandbox shows the run as a wireframe
 journey. The request starts as a sheet of paper: sign in with the issuer first (the issuer
 stamps the sheet), then write the workload and press "Seal and send". The sheet crumples into
 an envelope with an open lock and travels to the broker (`POST /v1/claims`), on to the
@@ -160,13 +162,13 @@ elsewhere; `prefers-reduced-motion` shortens every animation.
 
 `make record` rebuilds the GIF and MP4 above: it runs the demo with placeholder values only
 (an empty config, `example.com` URLs), drives it in headless Chrome
-(`scripts/record-web-3d.mjs`) and encodes with ffmpeg. It needs node, ffmpeg and Chrome or
+(`scripts/record-agentsandbox.mjs`) and encodes with ffmpeg. It needs node, ffmpeg and Chrome or
 Chromium (`CHROME` names the binary). `RECESS_DEMO_PACE` slows the demo (3 for the
 recording; 1, the default, is the scripted speed).
 
-## The Watch view
+## The Admin view
 
-Watch shows every live agent your kubeconfig may see, in the same theatre as your run. East of
+Admin (`--view admin`, `/admin`) shows every live agent your kubeconfig may see, in the same theatre as your run. East of
 the Kubernetes API, each namespace is a plot and each AgentSandbox a cage on it: cyan running,
 dashed grey pending, amber with policy gaps, red refused, green exited. The egress gateways
 float north of them, and a running agent has one line to the gateway carrying its traffic, a
@@ -270,7 +272,7 @@ empty, `0`, `false`, `no` or `off`), so a config file or a shell can carry all o
 | `--gateway-prefix` | `RECESS_GATEWAY_PREFIX` | `gateway-` |
 | `--no-gateways` | `RECESS_NO_GATEWAYS` | false |
 | `--listen` (web) | `RECESS_LISTEN` | `127.0.0.1:7480` |
-| `--view` (web) | `RECESS_VIEW` | `classic` (or `wired-3d`, `watch`) |
+| `--view` (web) | `RECESS_VIEW` | `classic` (or `agentsandbox`, `admin`) |
 | `--no-open` (web) | `RECESS_NO_OPEN` | false |
 | `--demo` | `RECESS_DEMO` | false |
 | (demo only) | `RECESS_DEMO_PACE` | 1 (slower above, 0.1 to 10) |

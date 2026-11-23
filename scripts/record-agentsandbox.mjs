@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 //
-// Record the web-3d demo for the README: Chrome's screencast frames with their timestamps,
+// Record the AgentSandbox demo for the README: Chrome's screencast frames with their timestamps,
 // driven like a person would (type the issuer, sign in, fill sheet 02 and send, drill into the gateway and the
 // vault while it runs, follow it to the exit, then tour the layers and orbit). Writes the PNG
-// frames and an ffmpeg concat list (frames.txt) into OUT_DIR; scripts/record-web-3d.sh encodes.
+// frames and an ffmpeg concat list (frames.txt) into OUT_DIR; scripts/record-agentsandbox.sh encodes.
 //
-// usage: node scripts/record-web-3d.mjs URL OUT_DIR [WIDTH HEIGHT]
+// usage: node scripts/record-agentsandbox.mjs URL OUT_DIR [WIDTH HEIGHT]
 // CHROME names the browser binary (Chrome or Chromium); the macOS path by default.
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync, mkdtempSync } from 'node:fs';

@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 //
-// The Watch view: every live agent the kubeconfig may see, in the base theatre (theatre.js)
-// Wired 3D stands on. The infrastructure stands where it stands in your run: the issuer, the
+// The Admin view: every live agent the kubeconfig may see, in the base theatre (theatre.js)
+// AgentSandbox stands on. The infrastructure stands where it stands in your run: the issuer, the
 // broker, the Kubernetes API and its Secrets vault, OpenBao and SPIRE. East of the API, the
 // fleet: each namespace a plot on the floor, each AgentSandbox a cage on it, coloured by where
 // it is in its life; the egress gateways float north of it, and a running agent has one line to
@@ -11,7 +11,7 @@
 // booting. The policies the agents name stand at the back of their plots. Read-only: nothing
 // here changes the cluster.
 //
-// The data is one server-sent event stream (/api/watch): the whole picture, then each change.
+// The data is one server-sent event stream (/api/admin): the whole picture, then each change.
 // Messages are queued as they come and applied once a frame, so a burst costs one layout.
 'use strict';
 
@@ -20,7 +20,7 @@ THEATRE.fogFar = 90;
 
 const STATE_COLOR = { running: C.wire, pending: C.muted, gaps: C.seal, refused: C.bad, exited: C.ok };
 
-// The Watch view's own shapes, beside the base theatre's.
+// The Admin view's own shapes, beside the base theatre's.
 const bar = (a, b) => ({ pts: [a, b], edges: [[0, 1]] });
 Object.assign(SHAPES, {
   // An agent's sandbox: the nsjail cage, big enough to read from high up.
@@ -1255,7 +1255,7 @@ const PANELS = {
 
 // ------------------------------------------------------------------------------ the Output tab
 
-// The selected agent's output, as Wired 3D shows a run's: the broker's stream, read as you, which
+// The selected agent's output, as AgentSandbox shows a run's: the broker's stream, read as you, which
 // it allows only for your own sandboxes; lines written once a frame, the last TERM_MAX kept.
 const TERM_MAX = 2000;
 const out = { tab: 'details', es: null, key: null, pending: [], lines: [] };
@@ -1287,7 +1287,7 @@ function openOutput(n) {
   $('term-count').textContent = '';
   if (at(n.obj, 'spec.workload.logs') === false) { outNote('Not captured: this sandbox did not opt in to output (logs off).'); return; }
   const q = new URLSearchParams({ ns: nsOf(n.obj), name: nameOf(n.obj) });
-  const es = new EventSource(`/api/watch/output?${q}`);
+  const es = new EventSource(`/api/admin/output?${q}`);
   out.es = es;
   // Each stream is one read: closed on its end, never reconnected (that would repeat the tail).
   const done = (text) => { if (text) outNote(text); if (out.es === es) { es.close(); out.es = null; } };
@@ -1428,7 +1428,7 @@ function bind() {
 
 function connect() {
   const pill = $('live');
-  const es = new EventSource('/api/watch');
+  const es = new EventSource('/api/admin');
   es.onopen = () => { pill.textContent = 'live'; pill.className = 'pill ok'; };
   es.onmessage = (ev) => { try { inbox.push(JSON.parse(ev.data)); } catch { /* a malformed message is dropped */ } };
   // The browser reconnects by itself, and the server answers with the whole picture again.

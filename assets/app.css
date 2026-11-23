@@ -603,7 +603,7 @@ main { max-width: 1240px; }
 .n-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .n-title .lock-slot { flex: none; }
 
-/* The Theme dropdown: which page shows the run (Classic, Wired 3D). */
+/* The View menu: which page shows the run (Classic, AgentSandbox, Admin). */
 .view-pick { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .view-pick select { background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: 12px var(--sans); }
 .view-pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

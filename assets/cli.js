@@ -73,6 +73,7 @@ const REFUSAL_HINTS = {
   forbidden: 'The broker does not allow this claim for your identity: check who may claim in the namespace (ADR-0046) and the policy it names.',
   not_implemented: 'The broker has this feature off (for --logs: logs.enabled in its config).',
   delegation_required: 'This audience is served from your own credential, so it must travel with the claim. On sheet 02, add it to Delegate as audience=source: env:VAR (a token in a variable set where recess web runs, e.g. github-git=env:GITHUB_TOKEN with GITHUB_TOKEN=$(gh auth token)), file:PATH (a token file), or store (the Keychain item the mediatore CLI saved); claude-code for anthropic. Or drop the audience from Audiences.',
+  delegation_refused: 'The broker did not accept the delegated credential as it is. An audience that signs in with a user name and a password (git over HTTPS, as github-git) takes them as user:secret: for GitHub, a file holding your-github-user:your-token, delegated as github-git=file:PATH (chmod 600).',
   delegation_expires_first: 'The credential you delegate (your Claude login, read from the Keychain) runs out before the claim would. Run Claude Code once so it refreshes its login, then start a new run; or ask for a shorter claim (RECESS_TTL, --ttl) that ends before the credential does.',
 };
 

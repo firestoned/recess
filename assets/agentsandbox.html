@@ -5,12 +5,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Recess Wired 3D</title>
+  <title>Recess AgentSandbox</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/3d.css">
+  <link rel="stylesheet" href="/agentsandbox.css">
   <script src="/cli.js" defer></script>
   <script src="/theatre.js" defer></script>
-  <script src="/3d.js" defer></script>
+  <script src="/agentsandbox.js" defer></script>
 </head>
 <body>
   <canvas id="scene" aria-hidden="true"></canvas>
@@ -41,15 +41,15 @@
   </div>
 
   <header class="bar">
-    <div class="brand"><span class="mark" aria-hidden="true"></span>Recess <em>wired 3D</em></div>
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Recess <em>AgentSandbox</em></div>
     <ol id="steps" class="steps" aria-label="Stages"></ol>
     <div class="bar-right">
       <label class="view-pick" title="What the page shows; switching keeps your run">
         <span>View</span>
         <select id="view">
           <option value="classic">Classic</option>
-          <option value="wired-3d" selected>Wired 3D</option>
-          <option value="watch">Watch</option>
+          <option value="agentsandbox" selected>AgentSandbox</option>
+          <option value="admin">Admin</option>
         </select>
       </label>
       <span id="status" class="pill" hidden></span>

@@ -6,6 +6,7 @@
 //! mediatore's own client crate for the login, the claim and the output, and the Kubernetes
 //! API for the `AgentSandbox`.
 
+mod admin;
 mod config;
 mod demo;
 mod egress;
@@ -18,7 +19,6 @@ mod secrets;
 mod settings;
 mod tui;
 mod util;
-mod watch;
 mod web;
 
 use std::net::SocketAddr;
@@ -50,7 +50,7 @@ struct WebArgs {
     /// Print the link instead of opening the browser
     #[arg(long, env = "RECESS_NO_OPEN", value_parser = clap::builder::FalseyValueParser::new())]
     no_open: bool,
-    /// The view a browser sees first: classic, wired-3d or watch; the page's View menu
+    /// The view a browser sees first: classic, agentsandbox or admin; the page's View menu
     /// changes it, and remembers (`--theme`, `RECESS_THEME`: its old names)
     #[arg(long, alias = "theme", env = "RECESS_VIEW", value_enum, default_value_t = web::View::Classic)]
     view: web::View,
@@ -59,10 +59,10 @@ struct WebArgs {
 #[derive(Subcommand)]
 enum Cmd {
     /// Serve the pipeline as a web page on loopback and open it. The page's View menu
-    /// switches between the stage cards (Classic), the wireframe 3D journey (Wired 3D) and
-    /// every live agent in the cluster (Watch) without touching the run.
+    /// switches between the stage cards (Classic), the wireframe 3D journey (AgentSandbox,
+    /// `agentsandbox`) and every live agent in the cluster (Admin, `admin`) without touching the run.
     Web(WebArgs),
-    /// The same as `web --view wired-3d`, kept for the name it had.
+    /// The same as `web --view agentsandbox`, kept for the name it had.
     #[command(name = "web-3d", hide = true)]
     Web3d(WebArgs),
     /// Show the pipeline in this terminal.
@@ -367,8 +367,8 @@ async fn run(cli: Cli, loaded: config::Loaded) -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Web(args) => serve_web(args, None, config_note).await,
         Cmd::Web3d(args) => {
-            eprintln!("recess: `web-3d` is now `web --view wired-3d`");
-            serve_web(args, Some(web::View::Wired3d), config_note).await
+            eprintln!("recess: `web-3d` is now `web --view agentsandbox`");
+            serve_web(args, Some(web::View::AgentSandbox), config_note).await
         }
         Cmd::Tui { common } => {
             tui::run(common.login(), common.claim(), common.kube(), common.demo).await

@@ -19,7 +19,7 @@ publish = false
 # the claim and the output stream are the CLI's code, not a copy. Move the pin with the broker
 # you run against; to build against a local checkout, see the README's [patch] recipe.
 mediatore-client = { git = "https://github.com/firestoned/mediatore", rev = "4dfb9f1775e14edd05eced08763ea214eba4e8ff" }
-# The broker client's HTTP response type, named for the watch page's output stream; the same
+# The broker client's HTTP response type, named for the admin page's output stream; the same
 # version mediatore-client pulls in, no features of its own.
 reqwest     = { version = "0.13", default-features = false }
 mediatore-proto  = { git = "https://github.com/firestoned/mediatore", rev = "4dfb9f1775e14edd05eced08763ea214eba4e8ff" }

@@ -8,7 +8,7 @@ Every object a sandbox touches is a Kubernetes resource, and most of them say in
 graph: from an `AgentSandbox` to the VM it ran in, the TPM that VM attested with, the
 `SandboxNode` mediatore registered for it, the SPIRE entries that gave it identities, the
 policy and bundle it was admitted under, the Secrets that held its credentials, the provider
-and the host it ran on. Recess's Watch view builds that graph from a watch of each kind and
+and the host it ran on. Recess's Admin view builds that graph from a watch of each kind and
 shows it per object, under **Cross-references**: each link, the field it was read from, and
 whether the object at the other end exists (✓) or not (✗). That is the audit.
 

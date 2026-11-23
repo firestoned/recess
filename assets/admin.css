@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 Erick Bourgeois, Recess */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-/* The watch page: 3d.css's blueprint, the bar's counts and filter, and the agents' labels. */
+/* The admin page: agentsandbox.css's blueprint, the bar's counts and filter, and the agents' labels. */
 :root { --carrier: #f472b6; --policy: #fb923c; }
 
 .counts { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }

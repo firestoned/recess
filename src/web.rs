@@ -47,17 +47,25 @@ const ASSETS: &[(&str, &str, &str)] = &[
         "text/javascript",
         include_str!("../assets/theatre.js"),
     ),
-    ("/3d.js", "text/javascript", include_str!("../assets/3d.js")),
-    ("/3d.css", "text/css", include_str!("../assets/3d.css")),
     (
-        "/watch.js",
+        "/agentsandbox.js",
         "text/javascript",
-        include_str!("../assets/watch.js"),
+        include_str!("../assets/agentsandbox.js"),
     ),
     (
-        "/watch.css",
+        "/agentsandbox.css",
         "text/css",
-        include_str!("../assets/watch.css"),
+        include_str!("../assets/agentsandbox.css"),
+    ),
+    (
+        "/admin.js",
+        "text/javascript",
+        include_str!("../assets/admin.js"),
+    ),
+    (
+        "/admin.css",
+        "text/css",
+        include_str!("../assets/admin.css"),
     ),
 ];
 
@@ -65,8 +73,8 @@ const ASSETS: &[(&str, &str, &str)] = &[
 const fn page(view: View) -> &'static str {
     match view {
         View::Classic => include_str!("../assets/index.html"),
-        View::Wired3d => include_str!("../assets/3d.html"),
-        View::Watch => include_str!("../assets/watch.html"),
+        View::AgentSandbox => include_str!("../assets/agentsandbox.html"),
+        View::Admin => include_str!("../assets/admin.html"),
     }
 }
 
@@ -82,25 +90,33 @@ pub enum View {
     Classic,
     /// Your run as a wireframe 3D journey: the request sealed into an envelope and carried
     /// through the issuer, the broker, the Kubernetes API and the sandbox VM.
-    #[value(name = "wired-3d")]
-    Wired3d,
+    #[value(name = "agentsandbox", alias = "wired-3d")]
+    AgentSandbox,
     /// Every live agent in the cluster, in the same 3D theatre; read-only.
-    Watch,
+    #[value(alias = "watch")]
+    Admin,
 }
 
 impl View {
-    const ALL: [Self; 3] = [Self::Classic, Self::Wired3d, Self::Watch];
+    const ALL: [Self; 3] = [Self::Classic, Self::AgentSandbox, Self::Admin];
 
     /// The name in `--view`, `?view=` and the cookie.
     const fn slug(self) -> &'static str {
         match self {
             Self::Classic => "classic",
-            Self::Wired3d => "wired-3d",
-            Self::Watch => "watch",
+            Self::AgentSandbox => "agentsandbox",
+            Self::Admin => "admin",
         }
     }
 
+    /// A view by its name, or by the name it had before (`wired-3d`, `watch`): links, cookies
+    /// and config files from then keep working.
     fn from_slug(s: &str) -> Option<Self> {
+        let s = match s {
+            "wired-3d" => "agentsandbox",
+            "watch" => "admin",
+            other => other,
+        };
         Self::ALL.into_iter().find(|t| t.slug() == s)
     }
 }
@@ -119,8 +135,8 @@ struct App {
     issuer: Mutex<(String, String)>,
     /// TLS probes by target, kept a minute.
     tls: Mutex<std::collections::HashMap<&'static str, (std::time::Instant, serde_json::Value)>>,
-    /// What the watch page shows, watched once for every viewer.
-    fleet: Arc<crate::watch::Fleet>,
+    /// What the admin page shows, watched once for every viewer.
+    fleet: Arc<crate::admin::Fleet>,
     /// Set on Ctrl-C: every open event stream ends, so the graceful shutdown is not left
     /// waiting on a page that would otherwise stream forever.
     stopping: tokio::sync::watch::Sender<bool>,
@@ -165,7 +181,7 @@ pub async fn serve(
         run: Mutex::new(None),
         issuer: Mutex::new((String::new(), String::new())),
         tls: Mutex::new(std::collections::HashMap::new()),
-        fleet: crate::watch::Fleet::new(),
+        fleet: crate::admin::Fleet::new(),
         stopping: tokio::sync::watch::channel(false).0,
     });
     *lock(&app.issuer) = (app.login.issuer.clone(), app.login.ca_file.clone());
@@ -187,15 +203,17 @@ pub async fn serve(
         .route("/api/events", get(events))
         .route("/api/recent", get(recent))
         .route("/api/tls", get(tls))
-        .route("/api/watch", get(watch_events))
-        .route("/api/watch/output", get(watch_output))
+        .route("/api/admin", get(admin_events))
+        .route("/api/admin/output", get(admin_output))
         .route_layer(middleware::from_fn_with_state(app.clone(), require_cookie));
     let api = ASSETS.iter().fold(api, |r, &(path, ct, body)| {
         r.route(path, get(move || async move { asset(ct, body) }))
     });
     let router = Router::new()
         .route("/", get(index))
-        .route("/watch", get(watch_page))
+        .route("/admin", get(admin_page))
+        // Its address before the rename, for links and bookmarks.
+        .route("/watch", get(|| async { Redirect::permanent("/admin") }))
         .merge(api)
         .layer(middleware::from_fn(guard))
         .with_state(app.clone());
@@ -395,15 +413,15 @@ fn trade_key(app: &App, t: &str, to: &str) -> Response {
     r
 }
 
-/// `/watch`: the Watch view at its own address, for a link or a bookmark; picking it from the
-/// View menu goes through `/?view=watch` and is remembered. `?t=` trades the key as `/` does.
-async fn watch_page(
+/// `/admin`: the Admin view at its own address, for a link or a bookmark; picking it from the
+/// View menu goes through `/?view=admin` and is remembered. `?t=` trades the key as `/` does.
+async fn admin_page(
     State(app): State<Shared>,
     Query(q): Query<IndexQuery>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(t) = q.t.as_deref() {
-        return trade_key(&app, t, "/watch");
+        return trade_key(&app, t, "/admin");
     }
     if !has_cookie(&app, &headers) {
         return (
@@ -412,25 +430,25 @@ async fn watch_page(
         )
             .into_response();
     }
-    asset("text/html; charset=utf-8", page(View::Watch))
+    asset("text/html; charset=utf-8", page(View::Admin))
 }
 
-/// The watch page's stream: the whole picture, then each change. The first viewer starts the
+/// The admin page's stream: the whole picture, then each change. The first viewer starts the
 /// watches (or the demo's fleet); a viewer that falls behind gets the whole picture again.
-async fn watch_events(
+async fn admin_events(
     State(app): State<Shared>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
     let fleet = app.fleet.clone();
     if fleet.first() {
         if app.demo {
-            tokio::spawn(crate::watch::demo(fleet.clone()));
+            tokio::spawn(crate::admin::demo(fleet.clone()));
         } else {
             match app
                 .kube_client
                 .get_or_try_init(|| crate::engine::kube_client(&app.kube))
                 .await
             {
-                Ok(c) => crate::watch::spawn(&fleet, c, app.kube.broker_namespace.clone()),
+                Ok(c) => crate::admin::spawn(&fleet, c, app.kube.broker_namespace.clone()),
                 Err(e) => fleet.note("cluster", &format!("kube: {e:#}")),
             }
         }
@@ -468,10 +486,10 @@ fn kube_name(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
 }
 
-/// One sandbox's output, for the watch page's Output tab: the broker's stream as the
+/// One sandbox's output, for the admin page's Output tab: the broker's stream as the
 /// signed-in user, which the broker allows only for the sandbox's owner.
 #[allow(clippy::result_large_err)] // axum handler: the error is the response
-async fn watch_output(
+async fn admin_output(
     State(app): State<Shared>,
     Query(q): Query<OutputQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, Response> {
@@ -481,7 +499,7 @@ async fn watch_output(
             "ns and name are Kubernetes names",
         ));
     }
-    let stream = crate::watch::output(app.claim.clone(), q.ns, q.name, app.demo)
+    let stream = crate::admin::output(app.claim.clone(), q.ns, q.name, app.demo)
         .map(|v| Ok(SseEvent::default().data(v.to_string())))
         .take_until(stopped(&app));
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
@@ -739,7 +757,7 @@ mod tests {
             assert!(!refs.is_empty(), "the page loads its script and stylesheet");
             for r in refs {
                 assert!(
-                    ["/", "/watch"].contains(&r) || ASSETS.iter().any(|(path, _, _)| *path == r),
+                    ["/", "/admin"].contains(&r) || ASSETS.iter().any(|(path, _, _)| *path == r),
                     "{r} is referenced by a page but not served"
                 );
             }
@@ -748,8 +766,8 @@ mod tests {
 
     #[test]
     fn the_two_pages_differ_and_share_the_cli_previews() {
-        assert_ne!(page(View::Classic), page(View::Wired3d));
-        assert_ne!(page(View::Wired3d), page(View::Watch));
+        assert_ne!(page(View::Classic), page(View::AgentSandbox));
+        assert_ne!(page(View::AgentSandbox), page(View::Admin));
         for view in View::ALL {
             assert!(local_refs(page(view)).contains(&"/cli.js"));
         }
@@ -778,16 +796,27 @@ mod tests {
         };
         let pick = view_for;
         let none = HeaderMap::new();
-        let picked = headers("recess=k; recess-view=watch");
+        let picked = headers("recess=k; recess-view=admin");
         let picked_before = headers("recess=k; recess-theme=wired-3d");
         assert_eq!(pick(View::Classic, None, &none), View::Classic);
-        assert_eq!(pick(View::Classic, None, &picked), View::Watch);
+        assert_eq!(pick(View::Classic, None, &picked), View::Admin);
         assert_eq!(
             pick(View::Classic, None, &picked_before),
-            View::Wired3d,
-            "the old cookie is still read"
+            View::AgentSandbox,
+            "the old cookie, and the old name in it, are still read"
         );
-        assert_eq!(pick(View::Wired3d, Some("classic"), &picked), View::Classic);
-        assert_eq!(pick(View::Wired3d, Some("bogus"), &none), View::Wired3d);
+        assert_eq!(
+            pick(View::Classic, Some("watch"), &none),
+            View::Admin,
+            "the old name in a link"
+        );
+        assert_eq!(
+            pick(View::AgentSandbox, Some("classic"), &picked),
+            View::Classic
+        );
+        assert_eq!(
+            pick(View::AgentSandbox, Some("bogus"), &none),
+            View::AgentSandbox
+        );
     }
 }

@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /* The wire page: a dark blueprint, the canvas behind everything, the sheet's inputs laid over
-   the paper drawn on it. The colours match the canvas palette in 3d.js. */
+   the paper drawn on it. The colours match the canvas palette in theatre.js. */
 :root {
   --bg: #05080f;
   --ink: #dbe7f5;
@@ -29,7 +29,7 @@ body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); }
 #scene.dragging { cursor: grabbing; }
 #scene.pick { cursor: pointer; }
 
-/* Labels anchored to 3D points; positioned by 3d.js every frame. */
+/* Labels anchored to 3D points; positioned by agentsandbox.js every frame. */
 #labels { position: fixed; inset: 0; pointer-events: none; }
 .lbl {
   position: absolute; left: 0; top: 0; white-space: nowrap;
@@ -224,7 +224,7 @@ input:disabled, textarea:disabled { color: var(--muted); }
   .caption.alert { animation: none; }
 }
 
-/* The Theme dropdown: which page shows the run (Classic, Wired 3D). */
+/* The View menu: which page shows the run (Classic, AgentSandbox, Admin). */
 .view-pick { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
 .view-pick select { width: auto; border: 1px solid var(--faint); padding: 5px 8px; font: 12px var(--mono); text-transform: none; letter-spacing: 0; }
 .view-pick select:hover, .view-pick select:focus-visible { border-color: var(--wire); outline: none; }
@@ -245,7 +245,7 @@ input:disabled, textarea:disabled { color: var(--muted); }
 .linewrap .copy.done { color: var(--ok); border-color: currentColor; opacity: 1; }
 .linewrap .copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
 
-/* The two cards laid over the wireframe (3d.js places and scales them every frame): You, a
+/* The two cards laid over the wireframe (agentsandbox.js places and scales them every frame): You, a
    rolodex card with your picture and details; the sandbox create, an index card with the
    start of the workload. */
 #cards { position: fixed; inset: 0; pointer-events: none; z-index: 1; }

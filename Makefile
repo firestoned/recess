@@ -51,5 +51,5 @@ dist: build ## The release binary into dist/recess-<os>-<arch>, with its SHA-256
 demo: ## The scripted run in a browser, no cluster
 	cargo run --release -- web --demo
 
-record: ## Record the web-3d demo into docs/media (GIF and MP4): needs node, ffmpeg, Chrome
-	scripts/record-web-3d.sh
+record: ## Record the AgentSandbox demo into docs/media (GIF and MP4): needs node, ffmpeg, Chrome
+	scripts/record-agentsandbox.sh
