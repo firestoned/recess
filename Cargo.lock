@@ -2471,6 +2471,7 @@ dependencies = [
  "mediatore-client",
  "mediatore-proto",
  "ratatui",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",

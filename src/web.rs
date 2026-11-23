@@ -20,7 +20,7 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use futures::Stream;
+use futures::{Stream, StreamExt as _};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -42,40 +42,61 @@ const ASSETS: &[(&str, &str, &str)] = &[
         "text/javascript",
         include_str!("../assets/cli.js"),
     ),
+    (
+        "/theatre.js",
+        "text/javascript",
+        include_str!("../assets/theatre.js"),
+    ),
     ("/3d.js", "text/javascript", include_str!("../assets/3d.js")),
     ("/3d.css", "text/css", include_str!("../assets/3d.css")),
+    (
+        "/watch.js",
+        "text/javascript",
+        include_str!("../assets/watch.js"),
+    ),
+    (
+        "/watch.css",
+        "text/css",
+        include_str!("../assets/watch.css"),
+    ),
 ];
 
-/// The page for each theme.
-const fn page(theme: Theme) -> &'static str {
-    match theme {
-        Theme::Classic => include_str!("../assets/index.html"),
-        Theme::Wired3d => include_str!("../assets/3d.html"),
+/// The page for each view.
+const fn page(view: View) -> &'static str {
+    match view {
+        View::Classic => include_str!("../assets/index.html"),
+        View::Wired3d => include_str!("../assets/3d.html"),
+        View::Watch => include_str!("../assets/watch.html"),
     }
 }
 
-/// The cookie that remembers the theme last picked in the page's dropdown.
-const THEME_COOKIE: &str = "recess-theme";
+/// The cookie that remembers the view last picked in the page's View menu.
+const VIEW_COOKIE: &str = "recess-view";
+/// Its name while the menu was called Theme; still read.
+const OLD_VIEW_COOKIE: &str = "recess-theme";
 
-/// How the run is shown; the API behind every theme is the same, so switching keeps the run.
+/// What the page shows. The API behind every view is the same, so switching keeps the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-pub enum Theme {
-    /// The stage cards.
+pub enum View {
+    /// Your run, as stage cards.
     Classic,
-    /// The wireframe 3D journey: the request sealed into an envelope and carried through the
-    /// issuer, the broker, the Kubernetes API and the sandbox VM.
+    /// Your run as a wireframe 3D journey: the request sealed into an envelope and carried
+    /// through the issuer, the broker, the Kubernetes API and the sandbox VM.
     #[value(name = "wired-3d")]
     Wired3d,
+    /// Every live agent in the cluster, in the same 3D theatre; read-only.
+    Watch,
 }
 
-impl Theme {
-    const ALL: [Self; 2] = [Self::Classic, Self::Wired3d];
+impl View {
+    const ALL: [Self; 3] = [Self::Classic, Self::Wired3d, Self::Watch];
 
-    /// The name in `--theme`, `?theme=` and the cookie.
+    /// The name in `--view`, `?view=` and the cookie.
     const fn slug(self) -> &'static str {
         match self {
             Self::Classic => "classic",
             Self::Wired3d => "wired-3d",
+            Self::Watch => "watch",
         }
     }
 
@@ -85,7 +106,7 @@ impl Theme {
 }
 
 struct App {
-    theme: Theme,
+    view: View,
     secret: String,
     login: LoginSettings,
     claim: ClaimSettings,
@@ -98,13 +119,26 @@ struct App {
     issuer: Mutex<(String, String)>,
     /// TLS probes by target, kept a minute.
     tls: Mutex<std::collections::HashMap<&'static str, (std::time::Instant, serde_json::Value)>>,
+    /// What the watch page shows, watched once for every viewer.
+    fleet: Arc<crate::watch::Fleet>,
+    /// Set on Ctrl-C: every open event stream ends, so the graceful shutdown is not left
+    /// waiting on a page that would otherwise stream forever.
+    stopping: tokio::sync::watch::Sender<bool>,
+}
+
+/// A future that is ready once the server is stopping.
+fn stopped(app: &App) -> impl std::future::Future<Output = ()> + Send + use<> {
+    let mut rx = app.stopping.subscribe();
+    async move {
+        let _ = rx.wait_for(|s| *s).await;
+    }
 }
 
 type Shared = Arc<App>;
 
 #[allow(clippy::too_many_arguments)] // one per CLI option group, passed straight through
 pub async fn serve(
-    theme: Theme,
+    view: View,
     listen: SocketAddr,
     login: LoginSettings,
     claim: ClaimSettings,
@@ -120,7 +154,7 @@ pub async fn serve(
     let mut b = [0u8; 24];
     aws_lc_rs::rand::fill(&mut b).map_err(|_| anyhow::anyhow!("no randomness"))?;
     let app = Arc::new(App {
-        theme,
+        view,
         secret: hex::encode(b),
         login,
         claim,
@@ -131,6 +165,8 @@ pub async fn serve(
         run: Mutex::new(None),
         issuer: Mutex::new((String::new(), String::new())),
         tls: Mutex::new(std::collections::HashMap::new()),
+        fleet: crate::watch::Fleet::new(),
+        stopping: tokio::sync::watch::channel(false).0,
     });
     *lock(&app.issuer) = (app.login.issuer.clone(), app.login.ca_file.clone());
     let listener = tokio::net::TcpListener::bind(listen).await?;
@@ -151,12 +187,15 @@ pub async fn serve(
         .route("/api/events", get(events))
         .route("/api/recent", get(recent))
         .route("/api/tls", get(tls))
+        .route("/api/watch", get(watch_events))
+        .route("/api/watch/output", get(watch_output))
         .route_layer(middleware::from_fn_with_state(app.clone(), require_cookie));
     let api = ASSETS.iter().fold(api, |r, &(path, ct, body)| {
         r.route(path, get(move || async move { asset(ct, body) }))
     });
     let router = Router::new()
         .route("/", get(index))
+        .route("/watch", get(watch_page))
         .merge(api)
         .layer(middleware::from_fn(guard))
         .with_state(app.clone());
@@ -165,9 +204,19 @@ pub async fn serve(
         let app = app.clone();
         async move {
             let _ = tokio::signal::ctrl_c().await;
+            eprintln!("recess: stopping (Ctrl-C again to stop at once)");
             if let Some(r) = lock(&app.run).as_ref() {
                 r.cancel();
             }
+            app.stopping.send_replace(true);
+            // Should anything still hold the shutdown up: a second Ctrl-C, or five seconds.
+            tokio::spawn(async {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    () = tokio::time::sleep(Duration::from_secs(5)) => {}
+                }
+                std::process::exit(130);
+            });
         }
     };
     axum::serve(listener, router)
@@ -266,7 +315,15 @@ async fn require_cookie(State(app): State<Shared>, req: Request, next: Next) -> 
 #[derive(Deserialize)]
 struct IndexQuery {
     t: Option<String>,
+    view: Option<String>,
+    /// `?view=`'s old name.
     theme: Option<String>,
+}
+
+impl IndexQuery {
+    fn asked(&self) -> Option<&str> {
+        self.view.as_deref().or(self.theme.as_deref())
+    }
 }
 
 /// A cookie's value by name.
@@ -280,11 +337,12 @@ fn cookie<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
         .find_map(|(k, v)| (k == name).then_some(v))
 }
 
-/// The theme to show: the one asked for, else the one picked last, else the server's.
-fn theme_for(default: Theme, asked: Option<&str>, headers: &HeaderMap) -> Theme {
+/// The view to show: the one asked for, else the one picked last, else the server's.
+fn view_for(default: View, asked: Option<&str>, headers: &HeaderMap) -> View {
     asked
-        .and_then(Theme::from_slug)
-        .or_else(|| cookie(headers, THEME_COOKIE).and_then(Theme::from_slug))
+        .and_then(View::from_slug)
+        .or_else(|| cookie(headers, VIEW_COOKIE).and_then(View::from_slug))
+        .or_else(|| cookie(headers, OLD_VIEW_COOKIE).and_then(View::from_slug))
         .unwrap_or(default)
 }
 
@@ -293,24 +351,13 @@ async fn index(
     Query(q): Query<IndexQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(t) = q.t {
-        if aws_lc_rs::constant_time::verify_slices_are_equal(t.as_bytes(), app.secret.as_bytes())
-            .is_err()
-        {
-            return (StatusCode::FORBIDDEN, "wrong key").into_response();
-        }
-        let cookie = format!("{COOKIE}={}; Path=/; HttpOnly; SameSite=Strict", app.secret);
-        // The key leaves the address bar; a theme asked for with it stays.
+    if let Some(t) = q.t.as_deref() {
+        // The key leaves the address bar; a view asked for with it stays.
         let to = q
-            .theme
-            .as_deref()
-            .and_then(Theme::from_slug)
-            .map_or_else(|| "/".to_owned(), |t| format!("/?theme={}", t.slug()));
-        let mut r = Redirect::to(&to).into_response();
-        if let Ok(v) = HeaderValue::from_str(&cookie) {
-            r.headers_mut().insert(header::SET_COOKIE, v);
-        }
-        return r;
+            .asked()
+            .and_then(View::from_slug)
+            .map_or_else(|| "/".to_owned(), |v| format!("/?view={}", v.slug()));
+        return trade_key(&app, t, &to);
     }
     if !has_cookie(&app, &headers) {
         return (
@@ -319,18 +366,125 @@ async fn index(
         )
             .into_response();
     }
-    let theme = theme_for(app.theme, q.theme.as_deref(), &headers);
-    let mut r = asset("text/html; charset=utf-8", page(theme));
-    if q.theme.is_some() {
+    let view = view_for(app.view, q.asked(), &headers);
+    let mut r = asset("text/html; charset=utf-8", page(view));
+    if q.asked().is_some() {
         let remember = format!(
-            "{THEME_COOKIE}={}; Path=/; SameSite=Strict; Max-Age=31536000",
-            theme.slug()
+            "{VIEW_COOKIE}={}; Path=/; SameSite=Strict; Max-Age=31536000",
+            view.slug()
         );
         if let Ok(v) = HeaderValue::from_str(&remember) {
             r.headers_mut().insert(header::SET_COOKIE, v);
         }
     }
     r
+}
+
+/// The key in the printed link, traded for the cookie, then on to `to` without it.
+fn trade_key(app: &App, t: &str, to: &str) -> Response {
+    if aws_lc_rs::constant_time::verify_slices_are_equal(t.as_bytes(), app.secret.as_bytes())
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "wrong key").into_response();
+    }
+    let cookie = format!("{COOKIE}={}; Path=/; HttpOnly; SameSite=Strict", app.secret);
+    let mut r = Redirect::to(to).into_response();
+    if let Ok(v) = HeaderValue::from_str(&cookie) {
+        r.headers_mut().insert(header::SET_COOKIE, v);
+    }
+    r
+}
+
+/// `/watch`: the Watch view at its own address, for a link or a bookmark; picking it from the
+/// View menu goes through `/?view=watch` and is remembered. `?t=` trades the key as `/` does.
+async fn watch_page(
+    State(app): State<Shared>,
+    Query(q): Query<IndexQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(t) = q.t.as_deref() {
+        return trade_key(&app, t, "/watch");
+    }
+    if !has_cookie(&app, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "open the link recess printed at start",
+        )
+            .into_response();
+    }
+    asset("text/html; charset=utf-8", page(View::Watch))
+}
+
+/// The watch page's stream: the whole picture, then each change. The first viewer starts the
+/// watches (or the demo's fleet); a viewer that falls behind gets the whole picture again.
+async fn watch_events(
+    State(app): State<Shared>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let fleet = app.fleet.clone();
+    if fleet.first() {
+        if app.demo {
+            tokio::spawn(crate::watch::demo(fleet.clone()));
+        } else {
+            match app
+                .kube_client
+                .get_or_try_init(|| crate::engine::kube_client(&app.kube))
+                .await
+            {
+                Ok(c) => crate::watch::spawn(&fleet, c, app.kube.broker_namespace.clone()),
+                Err(e) => fleet.note("cluster", &format!("kube: {e:#}")),
+            }
+        }
+    }
+    let start: Option<tokio::sync::broadcast::Receiver<Arc<str>>> = None;
+    let stream = futures::stream::unfold((fleet, start), |(fleet, rx)| async move {
+        let Some(mut rx) = rx else {
+            let (snap, rx) = fleet.subscribe();
+            return Some((Ok(SseEvent::default().data(snap)), (fleet, Some(rx))));
+        };
+        match rx.recv().await {
+            Ok(msg) => Some((Ok(SseEvent::default().data(&*msg)), (fleet, Some(rx)))),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                let (snap, rx) = fleet.subscribe();
+                Some((Ok(SseEvent::default().data(snap)), (fleet, Some(rx))))
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
+        }
+    });
+    let stream = stream.take_until(stopped(&app));
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
+#[derive(Deserialize)]
+struct OutputQuery {
+    ns: String,
+    name: String,
+}
+
+/// A Kubernetes object name: what may go into the broker's URL path, and nothing else.
+fn kube_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 253
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
+}
+
+/// One sandbox's output, for the watch page's Output tab: the broker's stream as the
+/// signed-in user, which the broker allows only for the sandbox's owner.
+#[allow(clippy::result_large_err)] // axum handler: the error is the response
+async fn watch_output(
+    State(app): State<Shared>,
+    Query(q): Query<OutputQuery>,
+) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, Response> {
+    if !kube_name(&q.ns) || !kube_name(&q.name) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "ns and name are Kubernetes names",
+        ));
+    }
+    let stream = crate::watch::output(app.claim.clone(), q.ns, q.name, app.demo)
+        .map(|v| Ok(SseEvent::default().data(v.to_string())))
+        .take_until(stopped(&app));
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
 async fn config(State(app): State<Shared>) -> Response {
@@ -549,6 +703,7 @@ async fn events(
             let _ = rx.changed().await;
         }
     });
+    let stream = stream.take_until(stopped(&app));
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
@@ -569,13 +724,22 @@ mod tests {
     }
 
     #[test]
+    fn only_a_kubernetes_name_reaches_the_brokers_url() {
+        assert!(kube_name("sandbox-f8e3aa8a"));
+        assert!(kube_name("team-a"));
+        for bad in ["", "../claims", "a/b", "A", "x?y", "a b", &"a".repeat(254)] {
+            assert!(!kube_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn every_file_each_page_loads_is_served() {
-        for theme in Theme::ALL {
-            let refs = local_refs(page(theme));
+        for html in View::ALL.map(page) {
+            let refs = local_refs(html);
             assert!(!refs.is_empty(), "the page loads its script and stylesheet");
             for r in refs {
                 assert!(
-                    ASSETS.iter().any(|(path, _, _)| *path == r),
+                    ["/", "/watch"].contains(&r) || ASSETS.iter().any(|(path, _, _)| *path == r),
                     "{r} is referenced by a page but not served"
                 );
             }
@@ -584,42 +748,46 @@ mod tests {
 
     #[test]
     fn the_two_pages_differ_and_share_the_cli_previews() {
-        assert_ne!(page(Theme::Classic), page(Theme::Wired3d));
-        for theme in Theme::ALL {
-            assert!(local_refs(page(theme)).contains(&"/cli.js"));
+        assert_ne!(page(View::Classic), page(View::Wired3d));
+        assert_ne!(page(View::Wired3d), page(View::Watch));
+        for view in View::ALL {
+            assert!(local_refs(page(view)).contains(&"/cli.js"));
         }
     }
 
     #[test]
-    fn every_page_offers_every_theme_with_its_own_selected() {
-        for theme in Theme::ALL {
-            let html = page(theme);
-            assert!(html.contains(r#"id="theme""#), "{theme:?} has the dropdown");
-            for t in Theme::ALL {
-                let opt = format!(r#"<option value="{}""#, t.slug());
-                assert!(html.contains(&opt), "{theme:?} offers {t:?}");
+    fn every_page_offers_every_view_with_its_own_selected() {
+        for view in View::ALL {
+            let html = page(view);
+            assert!(html.contains(r#"id="view""#), "{view:?} has the View menu");
+            for v in View::ALL {
+                let opt = format!(r#"<option value="{}""#, v.slug());
+                assert!(html.contains(&opt), "{view:?} offers {v:?}");
             }
-            let selected = format!(r#"<option value="{}" selected"#, theme.slug());
-            assert!(html.contains(&selected), "{theme:?} shows itself picked");
+            let selected = format!(r#"<option value="{}" selected"#, view.slug());
+            assert!(html.contains(&selected), "{view:?} shows itself picked");
         }
     }
 
     #[test]
-    fn the_theme_asked_for_wins_then_the_one_picked_last_then_the_servers() {
+    fn the_view_asked_for_wins_then_the_one_picked_last_then_the_servers() {
         let headers = |c: &str| {
             let mut h = HeaderMap::new();
             h.insert(header::COOKIE, HeaderValue::from_str(c).unwrap());
             h
         };
-        let pick = theme_for;
+        let pick = view_for;
         let none = HeaderMap::new();
-        let picked = headers("recess=k; recess-theme=wired-3d");
-        assert_eq!(pick(Theme::Classic, None, &none), Theme::Classic);
-        assert_eq!(pick(Theme::Classic, None, &picked), Theme::Wired3d);
+        let picked = headers("recess=k; recess-view=watch");
+        let picked_before = headers("recess=k; recess-theme=wired-3d");
+        assert_eq!(pick(View::Classic, None, &none), View::Classic);
+        assert_eq!(pick(View::Classic, None, &picked), View::Watch);
         assert_eq!(
-            pick(Theme::Wired3d, Some("classic"), &picked),
-            Theme::Classic
+            pick(View::Classic, None, &picked_before),
+            View::Wired3d,
+            "the old cookie is still read"
         );
-        assert_eq!(pick(Theme::Wired3d, Some("bogus"), &none), Theme::Wired3d);
+        assert_eq!(pick(View::Wired3d, Some("classic"), &picked), View::Classic);
+        assert_eq!(pick(View::Wired3d, Some("bogus"), &none), View::Wired3d);
     }
 }

@@ -235,6 +235,19 @@
         "layout-thrash",
         "output"
       ]
+    },
+    {
+      "id": "bug-017",
+      "error_message": "recess web: Ctrl-C does not stop the server while a Watch page is open",
+      "root_cause": "axum's graceful shutdown waits for every connection to finish; the /api/watch server-sent event stream never ends, so the shutdown waited forever, and tokio's ctrl_c handler had replaced the default SIGINT so a second Ctrl-C did nothing",
+      "fix": "an App.stopping watch channel set on Ctrl-C; both SSE streams take_until it; a fallback exits with 130 on a second Ctrl-C or after 5 s (src/web.rs)",
+      "tags": [
+        "web",
+        "shutdown",
+        "sse",
+        "watch"
+      ],
+      "date": "2026-11-23"
     }
   ]
 }

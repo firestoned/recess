@@ -225,9 +225,9 @@ input:disabled, textarea:disabled { color: var(--muted); }
 }
 
 /* The Theme dropdown: which page shows the run (Classic, Wired 3D). */
-.theme-pick { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
-.theme-pick select { width: auto; border: 1px solid var(--faint); padding: 5px 8px; font: 12px var(--mono); text-transform: none; letter-spacing: 0; }
-.theme-pick select:hover, .theme-pick select:focus-visible { border-color: var(--wire); outline: none; }
+.view-pick { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.view-pick select { width: auto; border: 1px solid var(--faint); padding: 5px 8px; font: 12px var(--mono); text-transform: none; letter-spacing: 0; }
+.view-pick select:hover, .view-pick select:focus-visible { border-color: var(--wire); outline: none; }
 
 /* The output box and its copy button, top right (the classic page's, in the wire's colours). */
 .linewrap { position: relative; flex: 1; min-height: 0; display: flex; }
@@ -325,3 +325,6 @@ input:disabled, textarea:disabled { color: var(--muted); }
 .lbl.authz.ok b { color: var(--ok); }
 .lbl.authz.gaps b { color: var(--seal); }
 .lbl.authz.bad b { color: var(--bad); }
+:root { --spire: #2dd4bf; }
+.lbl.spire b { color: var(--muted); }
+.lbl.spire.lit b { color: var(--spire); }

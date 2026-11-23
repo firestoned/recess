@@ -943,7 +943,29 @@ impl Run {
                     }
                 }
             }
+            // The claim's SPIRE entries (ADR-0006), once the record names the claim.
+            let claim_uid = obj
+                .as_ref()
+                .map(|o| str_at(o, "/status/claimUid").to_owned())
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| c.claim_uid.clone());
+            let spire = if warned.contains("spire") {
+                json!({"error": "not readable with this kubeconfig"})
+            } else {
+                match crate::kubeinfo::spire_entries(c.client.clone(), &claim_uid).await {
+                    Ok(entries) => json!({"entries": entries}),
+                    Err(e) => {
+                        warned.insert("spire");
+                        self.note(
+                            Step::Seal,
+                            format!("SPIRE entries (clusterstaticentries) not read: {e}"),
+                        );
+                        json!({"error": format!("{e}")})
+                    }
+                }
+            };
             let payload = json!({
+                "spire": spire,
                 "secrets": map,
                 "kubeSecrets": secrets,
                 "brokerNamespace": c.kube.broker_namespace,
@@ -1307,7 +1329,7 @@ fn read_ca(path: &str) -> anyhow::Result<Option<Vec<u8>>> {
         .map_err(|e| anyhow::anyhow!("CA file {path}: {e}"))
 }
 
-fn user_api(s: &ClaimSettings) -> anyhow::Result<Api> {
+pub(crate) fn user_api(s: &ClaimSettings) -> anyhow::Result<Api> {
     anyhow::ensure!(
         !s.url.is_empty(),
         "no user API URL: set MEDIATORE_URL or --mediatore"

@@ -72,6 +72,7 @@ const REFUSAL_HINTS = {
   namespace_required: 'This broker serves several namespaces: name one (MEDIATORE_NAMESPACE).',
   forbidden: 'The broker does not allow this claim for your identity: check who may claim in the namespace (ADR-0046) and the policy it names.',
   not_implemented: 'The broker has this feature off (for --logs: logs.enabled in its config).',
+  delegation_required: 'This audience is served from your own credential, so it must travel with the claim. On sheet 02, add it to Delegate as audience=source: env:VAR (a token in a variable set where recess web runs, e.g. github-git=env:GITHUB_TOKEN with GITHUB_TOKEN=$(gh auth token)), file:PATH (a token file), or store (the Keychain item the mediatore CLI saved); claude-code for anthropic. Or drop the audience from Audiences.',
   delegation_expires_first: 'The credential you delegate (your Claude login, read from the Keychain) runs out before the claim would. Run Claude Code once so it refreshes its login, then start a new run; or ask for a shorter claim (RECESS_TTL, --ttl) that ends before the credential does.',
 };
 
@@ -100,13 +101,13 @@ function fillForm(form, s) {
   }
 }
 
-// The Theme dropdown both pages carry: the server picks the page by ?theme= and remembers it,
+// The View menu every page carries: the server picks the page by ?view= and remembers it,
 // and the run lives on the server, so switching reloads the page onto the same run.
 document.addEventListener('DOMContentLoaded', () => {
-  const pick = document.getElementById('theme');
+  const pick = document.getElementById('view');
   if (!pick) return;
   pick.addEventListener('change', () => {
-    location.assign('/?theme=' + encodeURIComponent(pick.value));
+    location.assign('/?view=' + encodeURIComponent(pick.value));
   });
 });
 

@@ -28,8 +28,15 @@ const LEGACY: &str = "LOW_TIDE_";
 /// A `LOW_TIDE_*` name as its `RECESS_*` twin; any other name as it is.
 #[must_use]
 pub fn current_name(key: &str) -> String {
-    key.strip_prefix(LEGACY)
-        .map_or_else(|| key.to_owned(), |rest| format!("RECESS_{rest}"))
+    let key = key
+        .strip_prefix(LEGACY)
+        .map_or_else(|| key.to_owned(), |rest| format!("RECESS_{rest}"));
+    // The Theme menu became the View menu, and RECESS_THEME its old name.
+    if key == "RECESS_THEME" {
+        "RECESS_VIEW".to_owned()
+    } else {
+        key
+    }
 }
 
 /// Give every `LOW_TIDE_*` variable of the environment to its `RECESS_*` twin when that is
@@ -41,7 +48,7 @@ pub fn current_name(key: &str) -> String {
 pub unsafe fn adopt_legacy_env() -> Vec<String> {
     let legacy: Vec<(String, std::ffi::OsString)> = std::env::vars_os()
         .filter_map(|(k, v)| k.into_string().ok().map(|k| (k, v)))
-        .filter(|(k, _)| k.starts_with(LEGACY))
+        .filter(|(k, _)| k.starts_with(LEGACY) || k == "RECESS_THEME")
         .collect();
     let mut adopted = Vec::new();
     for (k, v) in legacy {
@@ -258,7 +265,7 @@ pub const TEMPLATE: &str = r#"# Recess config: KEY=VALUE, the mediatore CLI's ow
 #RECESS_GATEWAY_PREFIX=gateway-
 #RECESS_NO_GATEWAYS=false
 #RECESS_LISTEN=127.0.0.1:7480
-#RECESS_THEME=classic
+#RECESS_VIEW=classic
 #RECESS_NO_OPEN=false
 #RECESS_DEMO=false
 #RECESS_DEMO_PACE=1
@@ -286,6 +293,8 @@ mod tests {
         assert_eq!(current_name("LOW_TIDE_TTL"), "RECESS_TTL");
         assert_eq!(current_name("RECESS_TTL"), "RECESS_TTL");
         assert_eq!(current_name("MEDIATORE_URL"), "MEDIATORE_URL");
+        assert_eq!(current_name("RECESS_THEME"), "RECESS_VIEW");
+        assert_eq!(current_name("LOW_TIDE_THEME"), "RECESS_VIEW");
         let p = parse("LOW_TIDE_POOL=sandbox-pool\nRECESS_TTL=600\nOTHER=x\n");
         assert_eq!(
             p.pairs,

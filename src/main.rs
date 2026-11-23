@@ -18,6 +18,7 @@ mod secrets;
 mod settings;
 mod tui;
 mod util;
+mod watch;
 mod web;
 
 use std::net::SocketAddr;
@@ -49,18 +50,19 @@ struct WebArgs {
     /// Print the link instead of opening the browser
     #[arg(long, env = "RECESS_NO_OPEN", value_parser = clap::builder::FalseyValueParser::new())]
     no_open: bool,
-    /// The theme a browser sees first; the page's dropdown changes it, and remembers
-    #[arg(long, env = "RECESS_THEME", value_enum, default_value_t = web::Theme::Classic)]
-    theme: web::Theme,
+    /// The view a browser sees first: classic, wired-3d or watch; the page's View menu
+    /// changes it, and remembers (`--theme`, `RECESS_THEME`: its old names)
+    #[arg(long, alias = "theme", env = "RECESS_VIEW", value_enum, default_value_t = web::View::Classic)]
+    view: web::View,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Serve the pipeline as a web page on loopback and open it. The page's Theme dropdown
-    /// switches between the stage cards (Classic) and the wireframe 3D journey (Wired 3D)
-    /// without touching the run.
+    /// Serve the pipeline as a web page on loopback and open it. The page's View menu
+    /// switches between the stage cards (Classic), the wireframe 3D journey (Wired 3D) and
+    /// every live agent in the cluster (Watch) without touching the run.
     Web(WebArgs),
-    /// The same as `web --theme wired-3d`, kept for the name it had.
+    /// The same as `web --view wired-3d`, kept for the name it had.
     #[command(name = "web-3d", hide = true)]
     Web3d(WebArgs),
     /// Show the pipeline in this terminal.
@@ -276,11 +278,14 @@ fn main() -> anyhow::Result<()> {
         .is_some_and(|p| p.components().any(|c| c.as_os_str() == "low-tide"));
     if !loaded.legacy.is_empty() || legacy_path {
         eprintln!(
-            "recess: still reading names from before the rename (Low Tide): {}{}; `recess config` shows them",
+            "recess: still reading older names: {}{}; `recess config` shows them",
             if loaded.legacy.is_empty() {
                 String::new()
             } else {
-                format!("{} LOW_TIDE_* variable(s)", loaded.legacy.len())
+                format!(
+                    "{} variable(s) (LOW_TIDE_*, RECESS_THEME)",
+                    loaded.legacy.len()
+                )
             },
             if legacy_path {
                 format!(
@@ -362,8 +367,8 @@ async fn run(cli: Cli, loaded: config::Loaded) -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Web(args) => serve_web(args, None, config_note).await,
         Cmd::Web3d(args) => {
-            eprintln!("recess: `web-3d` is now `web --theme wired-3d`");
-            serve_web(args, Some(web::Theme::Wired3d), config_note).await
+            eprintln!("recess: `web-3d` is now `web --view wired-3d`");
+            serve_web(args, Some(web::View::Wired3d), config_note).await
         }
         Cmd::Tui { common } => {
             tui::run(common.login(), common.claim(), common.kube(), common.demo).await
@@ -372,20 +377,20 @@ async fn run(cli: Cli, loaded: config::Loaded) -> anyhow::Result<()> {
     }
 }
 
-/// `recess web`, with `theme` in place of `--theme` for the old `web-3d`.
+/// `recess web`, with `view` in place of `--view` for the old `web-3d`.
 async fn serve_web(
     args: WebArgs,
-    theme: Option<web::Theme>,
+    view: Option<web::View>,
     config_note: Option<String>,
 ) -> anyhow::Result<()> {
     let WebArgs {
         common,
         listen,
         no_open,
-        theme: chosen,
+        view: chosen,
     } = args;
     web::serve(
-        theme.unwrap_or(chosen),
+        view.unwrap_or(chosen),
         listen,
         common.login(),
         common.claim(),

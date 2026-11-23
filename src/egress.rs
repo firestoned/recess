@@ -54,6 +54,75 @@ pub fn checks(log: &str, claim_uid: &str) -> Vec<Check> {
         .collect()
 }
 
+/// Every gateway check in a stretch of the broker's log, for any claim: the claim's uid and
+/// the check. A broker without ADR-0062 logs only these.
+#[must_use]
+pub fn all_checks(log: &str) -> Vec<(String, Check)> {
+    log.lines()
+        .filter_map(|l| {
+            let uid = l
+                .split_whitespace()
+                .find_map(|w| w.strip_prefix("claim_uid="))?;
+            checks(l, uid)
+                .into_iter()
+                .next()
+                .map(|c| (uid.to_owned(), c))
+        })
+        .collect()
+}
+
+/// One gateway decision as the broker logs it (mediatore ADR-0062, "gateway decision"): which
+/// gateway let which claim reach which host, or refused it. The fields the authorizer sent and
+/// no others; never a path, a header or a credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Decision {
+    /// The broker's line time.
+    pub at: String,
+    pub claim_uid: String,
+    pub gateway: String,
+    /// `tunnel` or `inject`.
+    pub kind: String,
+    pub authority: String,
+    pub audience: String,
+    /// `allow` or `deny`.
+    pub verdict: String,
+    pub reason: String,
+}
+
+/// A `key=value` field of a `tracing` fmt line, its quotes taken off; "" when absent.
+fn field<'a>(line: &'a str, key: &str) -> &'a str {
+    line.split_whitespace()
+        .find_map(|w| w.strip_prefix(key)?.strip_prefix('='))
+        .map(|v| v.trim_matches('"'))
+        .unwrap_or_default()
+}
+
+/// Every gateway decision in a stretch of the broker's log, for any claim.
+#[must_use]
+pub fn decisions(log: &str) -> Vec<Decision> {
+    log.lines()
+        .filter(|l| l.contains(" gateway decision "))
+        .filter_map(|l| {
+            let claim_uid = field(l, "claim_uid");
+            let authority = field(l, "authority");
+            if claim_uid.is_empty() || authority.is_empty() {
+                return None;
+            }
+            Some(Decision {
+                at: l.split_whitespace().next().unwrap_or_default().to_owned(),
+                claim_uid: claim_uid.to_owned(),
+                gateway: field(l, "gateway").to_owned(),
+                kind: field(l, "kind").to_owned(),
+                authority: authority.to_owned(),
+                audience: field(l, "audience").to_owned(),
+                verdict: field(l, "verdict").to_owned(),
+                reason: field(l, "reason").to_owned(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,5 +158,26 @@ mod tests {
     fn a_uid_that_is_a_prefix_of_another_does_not_match_it_and_an_empty_one_matches_nothing() {
         assert_eq!(checks(LOG, "08799118"), Vec::<Check>::new());
         assert_eq!(checks(LOG, ""), Vec::<Check>::new());
+    }
+
+    #[test]
+    fn a_gateway_decision_line_is_read_with_its_gateway_host_and_verdict() {
+        let log = "\
+2026-11-22T14:41:58.469347Z  INFO mediatore_api: gateway decision claim_uid=08799118-4721-4406-85ce-21fcfb09f75b gateway=gateway-02 kind=\"tunnel\" authority=pypi.org:443 audience=\"\" verdict=\"allow\" reason=\"\" served=\"cache\" at=2026-11-22T14:41:58.400Z
+2026-11-22T14:41:59.000000Z  INFO mediatore_api: gateway decision claim_uid=08799118-4721-4406-85ce-21fcfb09f75b gateway=gateway-01 kind=\"inject\" authority=api.example.com audience=\"anthropic\" verdict=\"deny\" reason=\"not_allowed\" served=\"\" at=2026-11-22T14:41:59.000Z
+2026-11-22T14:42:00.000000Z DEBUG mediatore_api: claim egress answered to the gateway claim_uid=08799118-4721-4406-85ce-21fcfb09f75b endpoints=5
+";
+        let d = decisions(log);
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].gateway, "gateway-02");
+        assert_eq!(d[0].kind, "tunnel");
+        assert_eq!(d[0].authority, "pypi.org:443");
+        assert_eq!((d[0].verdict.as_str(), d[0].reason.as_str()), ("allow", ""));
+        assert_eq!(d[1].audience, "anthropic");
+        assert_eq!(
+            (d[1].verdict.as_str(), d[1].reason.as_str()),
+            ("deny", "not_allowed")
+        );
+        assert_eq!(d[1].at, "2026-11-22T14:41:59.000000Z");
     }
 }
