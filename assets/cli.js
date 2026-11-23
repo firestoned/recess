@@ -110,7 +110,44 @@ document.addEventListener('DOMContentLoaded', () => {
   pick.addEventListener('change', () => {
     location.assign('/?view=' + encodeURIComponent(pick.value));
   });
+  signedIn(pick);
 });
+
+// A shared Recess (behind Dex): who is signed in, as the Kubernetes API server sees them, and
+// a way out. A session that has ended sends the page to sign in again. On your own machine,
+// /api/config names no user and nothing is shown.
+async function signedIn(near) {
+  let r;
+  try { r = await fetch('/api/config'); } catch { return; }
+  if (r.status === 401) {
+    location.assign('/auth/login?next=' + encodeURIComponent(location.pathname + location.search));
+    return;
+  }
+  if (!r.ok) return;
+  const cfg = await r.json();
+  const u = cfg.user;
+  if (!u) return;
+  const box = document.createElement('span');
+  box.className = 'signed-in';
+  box.style.marginLeft = '0.75em';
+  box.style.whiteSpace = 'nowrap';
+  const who = document.createElement('span');
+  who.textContent = u.name;
+  const groups = (u.kubeGroups && u.kubeGroups.length ? u.kubeGroups : u.groups) || [];
+  who.title = 'Kubernetes sees you as ' + (u.kubeUser || u.name) +
+    (groups.length ? '\ngroups: ' + groups.join(', ') : '') +
+    '\nEvery read here is made with your own token, under your RBAC.';
+  const out = document.createElement('button');
+  out.type = 'button';
+  out.textContent = 'Sign out';
+  out.style.marginLeft = '0.5em';
+  out.addEventListener('click', async () => {
+    await fetch('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    location.assign('/');
+  });
+  box.append(who, out);
+  near.insertAdjacentElement('afterend', box);
+}
 
 // A copy-to-clipboard button, for the output box of either page: the two-sheet icon, a check for a moment once copied. `text`
 // is called at click time, so a live stream copies what has arrived by then.

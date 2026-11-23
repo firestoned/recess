@@ -1,0 +1,76 @@
+# Copyright (c) 2026 Erick Bourgeois, Recess
+# SPDX-License-Identifier: Apache-2.0
+#
+# One replica: sessions live in memory, so a second replica would not know them (a restart
+# signs everyone out).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recess
+  labels:
+    app.kubernetes.io/name: recess
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: recess
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: recess
+    spec:
+      serviceAccountName: recess
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: recess
+          image: ghcr.io/firestoned/recess
+          args: ["web"]
+          envFrom:
+            - configMapRef:
+                name: recess
+          ports:
+            - name: http
+              containerPort: 7480
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # Where the in-cluster config looks: the CA and the namespace, and no token.
+            - name: cluster
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            # A confidential client's secret, when RECESS_OIDC_CLIENT_SECRET_FILE points here.
+            - name: oidc
+              mountPath: /etc/recess/oidc
+              readOnly: true
+      volumes:
+        - name: cluster
+          projected:
+            sources:
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{ key: ca.crt, path: ca.crt }]
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef: { fieldPath: metadata.namespace }
+        - name: oidc
+          secret:
+            secretName: recess-oidc
+            optional: true

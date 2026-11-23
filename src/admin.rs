@@ -269,20 +269,31 @@ fn keyed(kind: &str, obj: &DynamicObject) -> (String, Value) {
 }
 
 /// Start the watches, and the reading of the broker's log in `broker_ns` (none when empty).
-pub fn spawn(fleet: &Arc<Fleet>, client: &kube::Client, broker_ns: String) {
+/// Their handles stop them, when the person they were started for signs out.
+pub fn spawn(
+    fleet: &Arc<Fleet>,
+    client: &kube::Client,
+    broker_ns: String,
+) -> Vec<tokio::task::AbortHandle> {
+    let mut tasks = Vec::new();
     for (kind, group, version, k, plural) in KINDS {
         let ar =
             ApiResource::from_gvk_with_plural(&GroupVersionKind::gvk(group, version, k), plural);
         let api: kube::Api<DynamicObject> = kube::Api::all_with(client.clone(), &ar);
-        tokio::spawn(watch_kind(fleet.clone(), api, kind));
+        tasks.push(tokio::spawn(watch_kind(fleet.clone(), api, kind)).abort_handle());
     }
     if !broker_ns.is_empty() {
         for (kind, selector) in ENVELOPES {
             let api: kube::Api<SecretMeta> = kube::Api::namespaced(client.clone(), &broker_ns);
-            tokio::spawn(watch_envelopes(fleet.clone(), api, kind, selector));
+            tasks.push(
+                tokio::spawn(watch_envelopes(fleet.clone(), api, kind, selector)).abort_handle(),
+            );
         }
     }
-    tokio::spawn(read_decisions(fleet.clone(), client.clone(), broker_ns));
+    tasks.push(
+        tokio::spawn(read_decisions(fleet.clone(), client.clone(), broker_ns)).abort_handle(),
+    );
+    tasks
 }
 
 /// Only mediatore's own SPIRE entries are kept: the cluster may hold many others.

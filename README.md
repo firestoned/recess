@@ -296,6 +296,7 @@ Each claim spends the session's refresh token, so each run logs in again unless
 make check   # fmt, clippy (pedantic, -D warnings), tests, cargo-deny
 make dist    # release binary into dist/recess-<os>-<arch>, with its SHA-256
 make demo    # the scripted run in a browser
+make image   # the distroless container image (podman), recess:dev
 ```
 
 CI (`.github/workflows/build.yaml`) runs the same targets: SPDX headers, signed commits, fmt,
@@ -313,7 +314,25 @@ arm64, attached to a published release.
 
 The web server listens on loopback only, checks the `Host` header, and requires the key from
 the printed link (traded for a `SameSite=Strict` `HttpOnly` cookie) on every route; POSTs
-take JSON only.
+take JSON only. Shared behind Dex ([In a cluster](#in-a-cluster)), it requires a sign-in
+instead, keeps each person's tokens on the server, and reads the cluster with their token,
+never with its own.
+
+## In a cluster
+
+`recess web` can also be shared, as a page your team opens to watch the fleet. Give it an
+issuer and the address browsers use:
+
+```sh
+recess web --view admin --listen 0.0.0.0:7480 \
+  --oidc-issuer https://dex.bar.foo.io --public-url https://recess.bar.foo.io
+```
+
+Everyone then signs in with Dex before any page loads. Every Kubernetes read is made with that
+person's own ID token, so the API server applies their RBAC; without an issuer, the server is
+yours alone (loopback, the key link, your kubeconfig). A shared Recess starts no runs.
+[`deploy/`](deploy/README.md) has the manifests, built from the distroless `Dockerfile`, and
+what Dex and the API server need.
 
 ## Kubernetes access
 

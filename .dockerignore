@@ -1,0 +1,11 @@
+# Copyright (c) 2026 Erick Bourgeois, Recess
+# SPDX-License-Identifier: Apache-2.0
+#
+# The build needs Cargo.toml, Cargo.lock, src/, assets/, LICENSE and NOTICE; nothing else.
+*
+!Cargo.toml
+!Cargo.lock
+!src/
+!assets/
+!LICENSE
+!NOTICE

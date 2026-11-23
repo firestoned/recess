@@ -17,6 +17,7 @@ mod phases;
 mod probe;
 mod secrets;
 mod settings;
+mod signin;
 mod tui;
 mod util;
 mod web;
@@ -44,9 +45,11 @@ struct Cli {
 struct WebArgs {
     #[command(flatten)]
     common: Common,
-    /// Where to listen; loopback only
+    /// Where to listen: loopback only, unless everyone signs in (--oidc-issuer)
     #[arg(long, env = "RECESS_LISTEN", default_value = "127.0.0.1:7480")]
     listen: SocketAddr,
+    #[command(flatten)]
+    sign_in: SignIn,
     /// Print the link instead of opening the browser
     #[arg(long, env = "RECESS_NO_OPEN", value_parser = clap::builder::FalseyValueParser::new())]
     no_open: bool,
@@ -54,6 +57,50 @@ struct WebArgs {
     /// changes it, and remembers (`--theme`, `RECESS_THEME`: its old names)
     #[arg(long, alias = "theme", env = "RECESS_VIEW", value_enum, default_value_t = web::View::Classic)]
     view: web::View,
+}
+
+/// Sign-in for a Recess shared beyond loopback: everyone signs in with this issuer (Dex), and
+/// the cluster is read with their own token, so their RBAC applies. Without an issuer, the
+/// server is yours alone: loopback, a key in the link, and your kubeconfig.
+#[derive(Args, Clone)]
+struct SignIn {
+    /// The issuer everyone signs in with; the Kubernetes API server must trust it
+    #[arg(long, env = "RECESS_OIDC_ISSUER", default_value = "")]
+    oidc_issuer: String,
+    /// The client Recess signs in as
+    #[arg(long, env = "RECESS_OIDC_CLIENT_ID", default_value = "kubernetes")]
+    oidc_client_id: String,
+    /// A file holding that client's secret (none for a public client)
+    #[arg(long, env = "RECESS_OIDC_CLIENT_SECRET_FILE", default_value = "")]
+    oidc_client_secret_file: String,
+    /// The audience the API server accepts, when it is not the client ID (asked of Dex as a
+    /// cross-client audience)
+    #[arg(long, env = "RECESS_OIDC_AUDIENCE", default_value = "")]
+    oidc_audience: String,
+    /// CA certificates (PEM) for the issuer
+    #[arg(long, env = "RECESS_OIDC_CA_FILE", default_value = "")]
+    oidc_ca_file: String,
+    /// A scope to request (repeatable); default `openid profile email groups offline_access`
+    #[arg(long = "oidc-scope", env = "RECESS_OIDC_SCOPES", value_delimiter = ',')]
+    oidc_scopes: Vec<String>,
+    /// Where browsers reach this server (https://recess.example.com); the issuer redirects to
+    /// <it>/auth/callback
+    #[arg(long, env = "RECESS_PUBLIC_URL", default_value = "")]
+    public_url: String,
+}
+
+impl SignIn {
+    fn settings(self) -> signin::Settings {
+        signin::Settings {
+            issuer: self.oidc_issuer,
+            client_id: self.oidc_client_id,
+            client_secret_file: self.oidc_client_secret_file,
+            audience: self.oidc_audience,
+            ca_file: self.oidc_ca_file,
+            scopes: self.oidc_scopes,
+            public_url: self.public_url,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -388,6 +435,7 @@ async fn serve_web(
         listen,
         no_open,
         view: chosen,
+        sign_in,
     } = args;
     web::serve(
         view.unwrap_or(chosen),
@@ -398,6 +446,7 @@ async fn serve_web(
         !no_open,
         common.demo,
         config_note,
+        sign_in.settings(),
     )
     .await
 }

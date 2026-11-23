@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Erick Bourgeois, Recess
+# SPDX-License-Identifier: Apache-2.0
+#
+# Not in kustomization.yaml (which puts everything in `recess`): apply it on its own, in
+# the namespace where the broker runs, and bind it as viewer-rbac.yaml does.
+#
+# In the broker's namespace: its pods' logs (the gateway decisions) and its Secrets' names.
+# Recess asks for Secrets as metadata only, but RBAC cannot grant less than list and watch,
+# which would let the holder read them by other means: grant this one with care.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recess-viewer-broker
+  namespace: banlieue-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["list", "watch"]

@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Erick Bourgeois, Recess
+# SPDX-License-Identifier: Apache-2.0
+#
+# Recess shared behind Dex: `kubectl apply -k deploy/` after setting the issuer and the public
+# URL in config.env. See deploy/README.md for what Dex and the API server need.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: recess
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - viewer-rbac.yaml
+configMapGenerator:
+  - name: recess
+    envs:
+      - config.env
+images:
+  - name: ghcr.io/firestoned/recess
+    newTag: main

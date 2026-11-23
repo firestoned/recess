@@ -21,7 +21,9 @@ publish = false
 mediatore-client = { git = "https://github.com/firestoned/mediatore", rev = "4dfb9f1775e14edd05eced08763ea214eba4e8ff" }
 # The broker client's HTTP response type, named for the admin page's output stream; the same
 # version mediatore-client pulls in, no features of its own.
-reqwest     = { version = "0.13", default-features = false }
+reqwest     = { version = "0.13", default-features = false, features = ["json", "form"] }
+# The bearer layer on each signed-in user's kube client.
+tower       = { version = "0.5", default-features = false, features = ["util"] }
 mediatore-proto  = { git = "https://github.com/firestoned/mediatore", rev = "4dfb9f1775e14edd05eced08763ea214eba4e8ff" }
 
 tokio       = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync", "net"] }

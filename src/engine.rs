@@ -1344,15 +1344,23 @@ pub(crate) fn user_api(s: &ClaimSettings) -> anyhow::Result<Api> {
 }
 
 pub(crate) async fn kube_client(k: &KubeTarget) -> anyhow::Result<kube::Client> {
+    Ok(kube::Client::try_from(kube_config(k).await?)?)
+}
+
+/// The cluster to talk to: `--kubeconfig` and `--context` when given; else `KUBECONFIG` or
+/// `~/.kube/config`, or, in a pod, its service account.
+pub(crate) async fn kube_config(k: &KubeTarget) -> anyhow::Result<kube::Config> {
     let opts = KubeConfigOptions {
         context: k.context.clone(),
         ..KubeConfigOptions::default()
     };
-    let cfg = match &k.kubeconfig {
-        Some(p) => kube::Config::from_custom_kubeconfig(Kubeconfig::read_from(p)?, &opts).await?,
-        None => kube::Config::from_kubeconfig(&opts).await?,
-    };
-    Ok(kube::Client::try_from(cfg)?)
+    Ok(match (&k.kubeconfig, &k.context) {
+        (Some(p), _) => {
+            kube::Config::from_custom_kubeconfig(Kubeconfig::read_from(p)?, &opts).await?
+        }
+        (None, Some(_)) => kube::Config::from_kubeconfig(&opts).await?,
+        (None, None) => kube::Config::infer().await?,
+    })
 }
 
 /// Each gateway as `name address` (its first address, without the type).
