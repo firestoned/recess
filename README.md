@@ -175,9 +175,11 @@ A station moves across the floor while the camera looks down on it, and in the u
 facing you while the camera looks level (as on AgentSandbox's first view, with sheet 01 square
 to you): that is how the OIDC tower goes up or down beside the login form. Its label and its
 edges go with it, and so does whatever stands on it: the VM takes its guest agent, egress
-proxy, gateways and audiences; your card takes its rolodex. In Admin, an agent moves its whole
-namespace plot and a VM its pool's rack; gateways, policies, providers and the base stations
-move one at a time. The camera stays put while you move something.
+proxy, gateways and audiences; your card takes its rolodex. In Admin, a namespace moves whole: an
+agent, or its plot's name, takes the plot with every agent on it; a VM, a pool's name, or the
+yard's name takes that namespace's yard of pools with every rack and VM in it (a rack never
+leaves its yard). Names are grabbed the same way as the things they name. Gateways, policies,
+providers and the base stations move one at a time. The camera stays put while you move something.
 
 Each move is saved as you let go, to `layout.json` beside `config.env`
 (`$XDG_CONFIG_HOME/recess/`, else `~/.config/recess/`): per view, an offset from where the code

@@ -352,13 +352,14 @@ function node(key, kind) {
 const BASE = [['issuer', 'issuer', ST.issuer], ['broker', 'broker', ST.broker], ['api', 'api', ST.api], ['vault', 'vault', ST.vault], ['openbao', 'openbao', ST.bao], ['spire', 'spire', ST.spire]];
 const BASE_AT = new Map(BASE.map(([key, , p]) => [key, p]));
 // What a Ctrl-drag of a node moves (the layout, theatre.js): a base station itself; an agent,
-// its namespace's plot; a VM, its pool's rack; a pool's yard (its namespace's racks), the
-// racks in it; a gateway, a policy or a provider, itself.
+// its namespace's plot; a pool, or a VM in one, its namespace's yard, with every rack and VM
+// in it (a rack never leaves its yard); a gateway, a policy or a provider, itself.
 // Each is kept as an offset by that key; layout() adds it.
 function groupOf(n) {
   if (n.kind === 'agent') return `ns/${nsOf(n.obj)}`;
-  if (n.kind === 'vm') return n.pool || null;
-  return BASE_AT.has(n.key) || ['ns', 'yard', 'pool', 'gateway', 'policy', 'provider'].includes(n.kind) ? n.key : null;
+  if (n.kind === 'vm') return n.pool ? `yard/${nsOf(S.pool.get(n.pool))}` : null;
+  if (n.kind === 'pool') return `yard/${nsOf(n.obj)}`;
+  return BASE_AT.has(n.key) || ['ns', 'yard', 'gateway', 'policy', 'provider'].includes(n.kind) ? n.key : null;
 }
 const offsetOf = (key) => LAYOUT.moved[key] || [0, 0, 0];
 // Move a group by d: a base station in place (its edges are drawn from it), the rest by
@@ -463,12 +464,12 @@ function layout() {
   const fleetEnd = rowsAt(plots, cx, FLEET.z0, 4, 4.5).end;
   const racksAt = (plots.length ? fleetEnd : FLEET.z0) + 3;
   const racksEnd = rowsAt(yards, cx, racksAt, 6, 5).end;
-  // Plots, yards and racks moved by hand stay on the floor; a rack moves with its yard.
+  // Plots and yards moved by hand stay on the floor; the racks, and their VMs, with their yard.
   for (const p of plots) { const o = offsetOf(`ns/${p.ns}`); p.x0 += o[0]; p.z0 += o[2]; }
   for (const y of yards) {
     const o = offsetOf(`yard/${y.ns}`);
     y.x0 += o[0]; y.z0 += o[2];
-    for (const r of y.rs) { const ro = offsetOf(r.key); r.x0 = y.x0 + r.dx + ro[0]; r.z0 = y.z0 + r.dz + ro[2]; }
+    for (const r of y.rs) { r.x0 = y.x0 + r.dx; r.z0 = y.z0 + r.dz; }
   }
   // The providers (the hosts the VMs are scheduled on), a row south of the racks.
   const provs = [...S.provider.keys()].sort();
@@ -586,7 +587,17 @@ function label(n, cls) {
   el.className = `lbl ${cls}`;
   const b = document.createElement('b'), i = document.createElement('i');
   el.append(b, i);
-  el.addEventListener('click', () => select(n.key));
+  // A click picks it; with Ctrl or Option, a press takes hold of what it names, as on the
+  // canvas: a namespace's plot with its agents, a yard (or a pool in it) with its racks and VMs.
+  el.addEventListener('click', (e) => { if (!moveKey(e)) select(n.key); });
+  el.addEventListener('pointerdown', (e) => {
+    if (HAND.m || !moveKey(e) || !n.pos) return;
+    const key = groupOf(n);
+    if (!key) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (takeHold(e, key, n.pos, ['ns', 'yard', 'pool'].includes(n.kind), (d) => { view.idle = 0; moveGroup(key, d); }, true)) view.touched = true;
+  });
   labelLayer.append(el);
   return { el, b, i, w: 0, title: null, detail: null, cls };
 }
