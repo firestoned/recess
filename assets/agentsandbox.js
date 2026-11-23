@@ -13,160 +13,8 @@
 
 'use strict';
 
-const $ = (id) => document.getElementById(id);
-const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-// ------------------------------------------------------------------------------ math
-
-const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const len = (a) => Math.hypot(a[0], a[1], a[2]);
-const norm = (a) => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
-const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-const clamp = (x, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
-const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-const easeOut = (t) => 1 - Math.pow(1 - t, 3);
-function rotY(p, a) { const c = Math.cos(a), s = Math.sin(a); return [p[0] * c + p[2] * s, p[1], -p[0] * s + p[2] * c]; }
-function rotX(p, a) { const c = Math.cos(a), s = Math.sin(a); return [p[0], p[1] * c - p[2] * s, p[1] * s + p[2] * c]; }
-function rotZ(p, a) { const c = Math.cos(a), s = Math.sin(a); return [p[0] * c - p[1] * s, p[0] * s + p[1] * c, p[2]]; }
-
-// A quadratic arc from a to b, lifted by h at the middle: the legs of the journey.
-function arc(a, b, h, t) {
-  const c = add(mix(a, b, 0.5), [0, h, 0]);
-  const u = 1 - t;
-  return [
-    u * u * a[0] + 2 * u * t * c[0] + t * t * b[0],
-    u * u * a[1] + 2 * u * t * c[1] + t * t * b[1],
-    u * u * a[2] + 2 * u * t * c[2] + t * t * b[2],
-  ];
-}
-
-// ------------------------------------------------------------------------------ palette
-
-const C = {
-  wire: [94, 231, 255],
-  ident: [167, 139, 250],
-  seal: [251, 191, 36],
-  ok: [74, 222, 128],
-  carrier: [244, 114, 182],
-  bad: [248, 113, 113],
-  dim: [52, 66, 90],
-  ink: [219, 231, 245],
-};
-const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${clamp(a).toFixed(3)})`;
-
-// ------------------------------------------------------------------------------ canvas and camera
-
-const canvas = $('scene');
-const ctx = canvas.getContext('2d');
-let W = 0, H = 0;
-const NEAR = 0.3;
-const cam = { pos: [0, 0, 9], target: [0, 0, 0], r: [1, 0, 0], u: [0, 1, 0], f: [0, 0, -1], F: 1, cx: 0, cy: 0 };
-
-function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth; H = window.innerHeight;
-  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  cam.cx = W / 2; cam.cy = H / 2;
-  cam.F = (H / 2) / Math.tan((50 * Math.PI / 180) / 2);
-}
-
-function aim(pos, target) {
-  cam.pos = pos; cam.target = target;
-  const f = norm(sub(target, pos));
-  let r = cross(f, [0, 1, 0]);
-  r = len(r) < 1e-6 ? [1, 0, 0] : norm(r);
-  cam.f = f; cam.r = r; cam.u = cross(r, f);
-}
-const toCam = (p) => { const d = sub(p, cam.pos); return [dot(d, cam.r), dot(d, cam.u), dot(d, cam.f)]; };
-const proj = (c) => [cam.cx + c[0] * cam.F / c[2], cam.cy - c[1] * cam.F / c[2]];
-const fog = (z) => clamp(1.25 - z / 62, 0.07, 1);
-
-// One segment in camera space, clipped at the near plane.
-function seg(a, b) {
-  if (a[2] < NEAR && b[2] < NEAR) return;
-  if (a[2] < NEAR) a = mix(a, b, (NEAR - a[2]) / (b[2] - a[2]));
-  else if (b[2] < NEAR) b = mix(b, a, (NEAR - b[2]) / (a[2] - b[2]));
-  const p = proj(a), q = proj(b);
-  ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]);
-}
-
-// A set of edges over world points, in one colour: a soft glow pass, then the crisp line.
-function lines(pts, edges, color, alpha = 1, width = 1, opts = {}) {
-  if (alpha <= 0.01 || !edges.length) return;
-  const cs = pts.map(toCam);
-  let z = 0, n = 0;
-  for (const c of cs) if (c[2] > NEAR) { z += c[2]; n++; }
-  if (!n) return;
-  const a = alpha * fog(z / n);
-  ctx.beginPath();
-  for (const [i, j] of edges) seg(cs[i], cs[j]);
-  if (opts.dash) ctx.setLineDash(opts.dash);
-  if (opts.dashOffset) ctx.lineDashOffset = opts.dashOffset;
-  if (opts.glow !== false) {
-    ctx.strokeStyle = rgba(color, a * 0.16); ctx.lineWidth = width * 4.5; ctx.stroke();
-  }
-  ctx.strokeStyle = rgba(color, a); ctx.lineWidth = width; ctx.stroke();
-  if (opts.dash) { ctx.setLineDash([]); ctx.lineDashOffset = 0; }
-}
-const chain = (n, closed = false) => {
-  const e = [];
-  for (let i = 0; i < n - 1; i++) e.push([i, i + 1]);
-  if (closed && n > 2) e.push([n - 1, 0]);
-  return e;
-};
-function polyline(pts, color, alpha, width, opts) { lines(pts, chain(pts.length), color, alpha, width, opts); }
-
-// ------------------------------------------------------------------------------ shapes (local)
-
-function box(w, h, d) {
-  const x = w / 2, y = h / 2, z = d / 2, pts = [];
-  for (const sx of [-x, x]) for (const sy of [-y, y]) for (const sz of [-z, z]) pts.push([sx, sy, sz]);
-  const edges = [];
-  for (let i = 0; i < 8; i++) for (let j = i + 1; j < 8; j++) { const k = i ^ j; if (k === 1 || k === 2 || k === 4) edges.push([i, j]); }
-  return { pts, edges };
-}
-function ringPts(r, n, plane = 'xz') {
-  const pts = [];
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2, c = Math.cos(a) * r, s = Math.sin(a) * r;
-    pts.push(plane === 'xz' ? [c, 0, s] : [c, s, 0]);
-  }
-  return pts;
-}
-function ring(r, n = 48, plane = 'xz') { return { pts: ringPts(r, n, plane), edges: chain(n, true) }; }
-function prism(n, r, h, phase = 0) {
-  const pts = [], edges = [];
-  for (let i = 0; i < n; i++) { const a = phase + (i / n) * Math.PI * 2; pts.push([Math.cos(a) * r, -h / 2, Math.sin(a) * r]); }
-  for (let i = 0; i < n; i++) { const a = phase + (i / n) * Math.PI * 2; pts.push([Math.cos(a) * r, h / 2, Math.sin(a) * r]); }
-  for (let i = 0; i < n; i++) { edges.push([i, (i + 1) % n], [n + i, n + ((i + 1) % n)], [i, n + i]); }
-  return { pts, edges };
-}
-function octa(r) {
-  const pts = [[r, 0, 0], [-r, 0, 0], [0, r, 0], [0, -r, 0], [0, 0, r], [0, 0, -r]];
-  const edges = [[0, 2], [0, 3], [0, 4], [0, 5], [1, 2], [1, 3], [1, 4], [1, 5], [2, 4], [4, 3], [3, 5], [5, 2]];
-  return { pts, edges };
-}
-function merge(...shapes) {
-  const pts = [], edges = [];
-  for (const s of shapes) {
-    const o = pts.length;
-    pts.push(...s.pts);
-    for (const [i, j] of s.edges) edges.push([i + o, j + o]);
-  }
-  return { pts, edges };
-}
-function moved(s, d) { return { pts: s.pts.map((p) => add(p, d)), edges: s.edges }; }
-// Local to world: scale, rotate (x, then y), translate.
-function place(s, at, o = {}) {
-  const k = o.scale ?? 1, ry = o.ry ?? 0, rx = o.rx ?? 0, rz = o.rz ?? 0;
-  return s.pts.map((p) => add(rotY(rotX(rotZ(mul(p, k), rz), rx), ry), at));
-}
-function draw(s, at, color, alpha = 1, o = {}) { lines(place(s, at, o), s.edges, color, alpha, o.width ?? 1, o); }
+// The renderer, the shapes and the infrastructure stations are the base theatre (theatre.js),
+// shared with the Admin view; this file adds the run's journey to it.
 
 // Seven-segment digits as lines: the exit code, drawn at the end of the journey.
 const SEGS = { a: [[0, 2], [1, 2]], b: [[1, 2], [1, 1]], c: [[1, 1], [1, 0]], d: [[0, 0], [1, 0]], e: [[0, 1], [0, 0]], f: [[0, 2], [0, 1]], g: [[0, 1], [1, 1]] };
@@ -189,18 +37,25 @@ function digits(text, w = 0.9, h = 0.9, gap = 0.5) {
 
 // ------------------------------------------------------------------------------ the world
 
-const ST = {
-  you: [0, 0, 0],
-  issuer: [-15, 3.2, -15],
-  broker: [12, 0.4, -7],
-  api: [23, 0, -13],
+// The run's own places, beside the base theatre's stations. You (sheet 01, then your card on
+// its rolodex) stand close to the issuer you sign in with.
+Object.assign(ST, {
+  you: [-7, 0, 1],
   vm: [35, 0, -6],
-  end: [46, 0.6, -14],
-};
-ST.vault = add(ST.api, [5.6, -1.0, 3.6]);
-// Sheet 02, mediatore sandbox create: its own place after the login, on the way to the broker.
-ST.form = [7.5, 0, -2];
+  // North of the VM, at right angles to the road in: clear of the gateways and the audiences east of it.
+  end: [36, 0.6, -21],
+});
+// Sheet 02, mediatore sandbox create: its own place after the login, close by your card on its
+// rolodex, on the way to the broker.
+ST.form = add(ST.you, [7.5, 0, -2]);
 ST.cage = ST.vm;
+// The OIDC issuer stands up and to the left of sheet 01, so the first view (the camera 9 south
+// of the sheet, 50 degrees high) shows the tower left of the login form: about a fifth of the
+// way in from the left edge, above the middle, at 1.6:1. The Admin view keeps the base place.
+ST.issuer = add(ST.you, [-6.2, 1.5, -4]);
+// Here OpenBao stands below SPIRE, at 7 o'clock to it as the camera looks north: south and a
+// little west, 6.5 away. (The Admin view keeps the base theatre's place, between the API and SPIRE.)
+ST.bao = add(ST.spire, [-3.25, 0, 5.6]);
 
 // The legs, in journey order; p is how much of each is travelled (drawn solid).
 const LEGS = {
@@ -213,19 +68,13 @@ const LEGS = {
 };
 const legAt = (leg, t) => arc(leg.a, leg.b, leg.h, clamp(t));
 
-const SHAPES = {
+Object.assign(SHAPES, {
   floor: (() => {
     const pts = [], edges = [], y = -3.2;
     for (let x = -28; x <= 60; x += 4) { const o = pts.length; pts.push([x, y, -40], [x, y, 14]); edges.push([o, o + 1]); }
     for (let z = -40; z <= 14; z += 4) { const o = pts.length; pts.push([-28, y, z], [60, y, z]); edges.push([o, o + 1]); }
     return { pts, edges };
   })(),
-  issuer: merge(prism(5, 1.1, 2.4, Math.PI / 10), prism(5, 0.55, 3.4, Math.PI / 10)),
-  issuerRing: ring(1.9, 40),
-  brokerCore: octa(1.15),
-  brokerRing: ring(2.1, 56),
-  apiPlate: prism(6, 1.9, 0.32, Math.PI / 6),
-  vault: merge(box(1.5, 1.5, 1.5), moved(ring(0.42, 24, 'xy'), [0, 0, 0.76]), moved(ring(0.12, 12, 'xy'), [0, 0, 0.76])),
   vm: box(4.4, 2.8, 2.8),
   vmRack: merge(...[-0.9, -0.45, 0, 0.45, 0.9].map((y) => ({ pts: [[-2.2, y, 1.4], [-1.4, y, 1.4]], edges: [[0, 1]] }))),
   cage: (() => {
@@ -235,12 +84,9 @@ const SHAPES = {
     for (const z of [-0.42, 0, 0.42]) for (const x of [-0.85, 0.85]) bars.push({ pts: [[x, -0.85, z], [x, 0.85, z]], edges: [[0, 1]] });
     return merge(b, ...bars);
   })(),
-  gateway: octa(0.38),
   endRing: ring(2.6, 64, 'xy'),
-  packet: octa(0.17),
   guest: merge(box(0.7, 0.42, 0.42), moved(box(0.4, 0.2, 0.44), [0, 0.02, 0])),
   proxy: merge(octa(0.32), ring(0.42, 20)),
-  audience: merge(ring(0.55, 28, 'xy'), octa(0.22)),
   // Where the request started, once the sheet is gone: a laptop.
   laptop: (() => {
     const base = box(1.8, 0.06, 1.2);
@@ -251,7 +97,7 @@ const SHAPES = {
     return moved(merge(moved(base, [0, 0, 0]), screen, inner, ...keys), [0, -0.7, 0]);
   })(),
   spark: octa(0.3),
-};
+});
 
 // The parts that come and go with the run's data: one node per gateway, per audience the
 // workload named, per Secret in the vault; and the two pieces of the guest the jail touches.
@@ -270,6 +116,74 @@ function viaOf() { return model.data.seal.via ?? model.data.run.via ?? null; }
 // The claim's tunnels as the broker's log shows them: each gateway check of the claim.
 const egressOf = () => model.data.run.egress || {};
 const tierPos = () => mix(gwPos(0), gwPos(gwCount() - 1), 0.5);
+// The SandboxPolicy the claim names (spec.policyRef; mediatore has no default policy), and
+// what the AgentSandbox says of it: the bundle the record was written under, the reconciler's
+// PolicyConformant condition, and a refusal to resolve it.
+function policyOf() {
+  const w = model.data.create.workload || {}, obj = model.data.run.object || {}, st = obj.status || {}, rec = st.record || {};
+  const cond = (st.conditions || []).find((c) => c.type === 'PolicyConformant') || null;
+  return {
+    name: obj.spec?.policyRef?.name || w.policy || '',
+    seenName: !!obj.spec?.policyRef?.name,
+    uid: rec.policyUid || '', version: rec.bundleVersion || '', cond,
+    refused: /^policy_not_resolved/.test(st.reason || '') ? st.reason : '',
+  };
+}
+// The broker's refusal of the claim, when that is how the run ended.
+const claimRefusal = () => brokerError(model.finished?.note || '');
+
+// SPIRE, as Recess sees it: the claim's ClusterStaticEntries (mediatore ADR-0006), and the
+// node agent the record names. OpenBao is not reachable from here: what shows it worked is
+// the sealed envelopes in the vault.
+const spireOf = () => model.data.seal.spire || {};
+const entries = () => spireOf().entries || [];
+const entriesSet = () => entries().some((e) => e.set);
+// Whether this run's entries were ever on the server: the data can run ahead of the scene (the
+// release deletes them before the scene has shown the run), and the scene tells it in order.
+let entriesWereSet = false;
+const entriesShown = () => { if (entriesSet()) entriesWereSet = true; return entriesWereSet; };
+const attested = () => !!(model.data.run.object?.status?.record?.nodeId || vmOf().attestationSubject);
+// The guest holds this claim's identities from its attestation until the release.
+const svidLive = () => (attested() || entriesShown()) && D.act >= 7 && D.act < 9;
+// The VM attested (by its TPM) while it is this run's: from the claim's write to its release.
+const vtpmLive = () => attested() && D.act >= 5 && D.act < 9;
+const vtpmPts = () => arcPts(add(ST.spire, [0, 1.9, 0]), add(ST.vm, [0, 1.6, 0]), 5, 16);
+const sealedCount = () => (model.data.seal.kubeSecrets || []).length;
+// Where the claim is authorized, in the order it meets each place, and what each has decided
+// as far as Recess can see: 'ok', 'bad', 'gaps' (shadow mode: allowed, but enforce would not),
+// or 'pending'.
+function authzPoints() {
+  const claim = model.data.create.claim || {}, obj = model.data.run.object || {}, pol = policyOf(), r = claimRefusal();
+  const eg = egressOf(), live = D.act >= 7;
+  const broker = r ? 'bad' : claim.name || obj.metadata?.uid ? 'ok' : 'pending';
+  const api = broker === 'bad' ? 'pending' : pol.refused ? 'bad' : pol.cond?.status === 'False' ? 'gaps' : obj.metadata?.uid ? 'ok' : 'pending';
+  const gw = (eg.checks || 0) > 0 ? 'ok' : 'pending';
+  return [
+    { id: 'authz-broker', name: 'Claim admission', at: add(ST.broker, [0, 2.9, 0]), state: broker, show: () => true },
+    { id: 'authz-api', name: 'Admission and reconcile', at: add(ST.api, [0, 2.4, 0]), state: api, show: () => true },
+    { id: 'authz-gw', name: 'Gateway authorizer', at: add(tierPos(), [0, -((gwCount() - 1) * 0.9 + 1.9), 0]), state: gw, show: () => live },
+  ];
+}
+const authzById = (id) => authzPoints().find((a) => a.id === id);
+// Every check on the claim's way, from mediatore's code and ADRs: where it runs, what it
+// compares, and how a refusal shows. `codes` match the broker's error, so a refusal marks
+// the check that made it.
+const AUTHZ_CHECKS = [
+  { at: 'authz-broker', what: 'Your ID token, and the issuer\'s groups the broker requires', how: '403 forbidden', codes: ['forbidden', 'unauthorized'] },
+  { at: 'authz-broker', what: 'The namespace: your groups against sandboxes.namespaces (ADR-0046)', how: '403; the broker logs "namespace decision"', codes: ['namespace_required', 'namespace_forbidden'] },
+  { at: 'authz-broker', what: 'Each audience is usable in the namespace (ADR-0053)', how: '400 unknown_audience', codes: ['unknown_audience'] },
+  { at: 'authz-broker', what: 'The policy grants each audience and the ttl fits its lease (policy.audiences: enforce)', how: '400 policy_required, unknown_policy, ttl_exceeds_policy; 503 policy_not_synced', codes: ['policy_required', 'unknown_policy', 'ttl_exceeds_policy', 'policy_not_synced'] },
+  { at: 'authz-broker', what: 'The image is from a registry the pool reaches', how: '400 unreachable_registry', codes: ['unreachable_registry'] },
+  { at: 'authz-broker', what: 'The policy named resolves in the namespace\'s policy sources (ADR-0054, policy.egress: enforce; shadow only logs)', how: '400 policy_not_resolved', codes: ['policy_not_resolved'] },
+  { at: 'authz-api', what: 'Kubernetes admission (CEL): spec.subject.id is the caller, the spec is immutable, only the broker writes status', how: 'the API server refuses the write', codes: [] },
+  { at: 'authz-api', what: 'The reconciler (in the broker): a verified bundle for the policy, and the sandbox against it', how: 'status.reason policy_not_resolved; the PolicyConformant condition (shadow: gaps P001 to P012)', codes: [] },
+  { at: 'authz-gw', what: 'Each tunnel: the host against the claim\'s allowlist (its audiences\' endpoints, and the bundle\'s direct egress under ADR-0030 enforce)', how: 'the tunnel is refused; the gateway logs "tunnel" with verdict deny', codes: [] },
+  { at: 'authz-gw', what: 'Each credential the proxy asks to place: the policy admits the audience', how: 'the inject is refused; the broker logs "gateway credential refused"', codes: [], unseen: true },
+  { at: 'authz-broker', what: 'The guest\'s token requests, for as long as the claim lives', how: '403 claim revoked or expired', codes: [], unseen: true },
+];
+const AUTHZ_COLOR = { ok: 'ok', bad: 'bad', gaps: 'seal', pending: 'dim' };
+// Where this claim's traffic left by, once any is seen: the carrier, else the tier. Null before.
+const egressTo = () => ((egressOf().checks || 0) > 0 ? (carrierIdx() >= 0 ? gwPos(carrierIdx()) : tierPos()) : null);
 function carrierIdx() {
   const v = viaOf();
   const name = typeof v === 'string' ? v : v?.gateway;
@@ -368,6 +282,7 @@ let es = null;
 let model = freshModel();
 
 function freshModel() {
+  entriesWereSet = false;
   return {
     steps: Object.fromEntries(STEPS.map(([k]) => [k, 'pending'])),
     notes: {},
@@ -420,7 +335,7 @@ function mkPaper(home, formId, W, H) {
 }
 const PAPERS = { login: mkPaper(ST.you, 'sheet-login', 4.4, 4.6), create: mkPaper(ST.form, 'sheet-create', 6, 6.6) };
 // The camera square to each sheet while it is being written.
-const POSE = { login: { pos: [0, 0, 9], target: [0, 0, 0] }, create: { pos: add(ST.form, [0, 0, 9]), target: ST.form } };
+const POSE = { login: { pos: add(ST.you, [0, 0, 9]), target: ST.you.slice() }, create: { pos: add(ST.form, [0, 0, 9]), target: ST.form } };
 // flip: 0 the face (the address), 1 the back (the flap and the seal); seal: the wax seal pressed.
 const env = { pos: [0, 0, 0], scale: 0, lock: 0, open: 0, sink: 0, flip: 1, seal: 1, color: C.wire, leg: null };
 // youCard: sheet 01 turned into your card on its rolodex, from 0 to 1, once you are signed in.
@@ -600,6 +515,11 @@ const ACTS = {
   },
   // 6. Sealed: the credentials go into Secrets, sealed at rest; the lock closes.
   6: async () => {
+    // The broker asks OpenBao's transit key to encrypt; the envelopes come back.
+    const toBao = { a: ST.broker, b: ST.bao, h: 1.4, color: C.seal, p: 0 };
+    await packet(toBao, { dur: 0.7 });
+    burst(ST.bao, C.seal, 1.3, 0.6);
+    await packet(toBao, { dur: 0.6, back: true });
     await tween(0.7, (k) => { env.lock = easeOut(k); });
     burst(env.pos, C.seal, 1.4, 0.7);
     const toVault = { a: ST.api, b: ST.vault, h: 1.2, color: C.seal, p: 0 };
@@ -813,7 +733,6 @@ function drawEnvelope() {
     }
   }
 }
-const mixColor = (a, b, t) => [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * clamp(t)));
 
 // ------------------------------------------------------------------------------ stations
 
@@ -828,19 +747,11 @@ function drawStations() {
   // You, once the sheet has left.
   if (!PAPERS.login.visible) draw(SHAPES.laptop, ST.you, C.wire, 0.75, { ry: -0.35 });
 
-  // The issuer.
-  const ia = act >= 1 ? 1 : 0.45;
-  draw(SHAPES.issuer, ST.issuer, C.ident, ia, { ry: t * 0.25 });
-  draw(SHAPES.issuerRing, add(ST.issuer, [0, 1.6 + Math.sin(t * 1.3) * 0.15, 0]), C.ident, ia * 0.8, { ry: -t * 0.4, rx: 0.25 });
-
-  // The broker.
-  draw(SHAPES.brokerCore, ST.broker, C.wire, lit(4), { ry: t * 0.6, rx: t * 0.3 });
-  draw(SHAPES.brokerRing, ST.broker, C.wire, lit(4) * 0.8, { rx: 0.5, ry: t * 0.2 });
-
-  // The Kubernetes API: three plates, and the Secrets vault beside it.
-  for (const [i, y] of [-0.85, 0, 0.85].entries()) {
-    draw(SHAPES.apiPlate, add(ST.api, [0, y, 0]), C.wire, lit(5), { ry: t * 0.15 * (i % 2 ? -1 : 1) });
-  }
+  // The base theatre's stations: the issuer, the broker, the Kubernetes API and the Secrets
+  // vault beside it, lit as the run reaches them.
+  drawIssuer(act >= 1 ? 1 : 0.45, t);
+  drawBroker(lit(4), t);
+  drawApi(lit(5), t);
   drawVault();
 
   // The sandbox VM, the jail in it, and the egress gateways.
@@ -862,22 +773,22 @@ function drawStations() {
       const g = gwPos(i), on = i < gws, carried = i === carrier;
       const col = carried ? C.carrier : C.wire;
       const a = !on ? 0.2 : carrier < 0 ? 0.8 : carried ? 1 : 0.35;
-      draw(SHAPES.gateway, g, col, a, { ry: t * (carried ? 2.2 : 0.8) + i, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1 });
-      if (fx.cageLit > 0 && on) {
-        // Carried: solid. Unknown which, but tunnels seen: every line warm. Else candidates, dashed.
-        const warm = carrier < 0 && (egressOf().checks || 0) > 0;
-        if (carried) lines([PROXY, g], [[0, 1]], col, 0.9 * fx.cageLit, 1.6);
-        // Which one carried each tunnel is not reported, so every live gateway's edge is lit alike.
-        else if (warm) lines([PROXY, g], [[0, 1]], C.carrier, (0.6 + 0.35 * (fx.tierPulse || 0)) * fx.cageLit, 1.7, { dash: [9, 4], dashOffset: -clock * 30 });
-        else lines([PROXY, g], [[0, 1]], col, (carrier < 0 ? 0.4 : 0.18) * fx.cageLit, 1, { dash: [3, 5], dashOffset: -clock * 20, glow: false });
-      }
+      // Once the carrier is known the others stand back: thin and unlit.
+      const unused = carrier >= 0 && !carried;
+      draw(SHAPES.gateway, g, col, a, { ry: t * (carried ? 2.2 : 0.8) + i, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1, glow: !unused });
     }
+    // One edge out, and only once there is traffic: to the gateway carrying the tunnels, or,
+    // while which one is not reported, to the tier as a whole. No edges to mere candidates.
+    const out = egressTo();
+    if (out && fx.cageLit > 0) lines([PROXY, out], [[0, 1]], C.carrier, (carrier >= 0 ? 0.95 : 0.6 + 0.35 * (fx.tierPulse || 0)) * fx.cageLit, carrier >= 0 ? 2.2 : 1.8);
     // The tier, outlined once tunnels are seen; brighter as a check arrives.
     if ((egressOf().checks || 0) > 0 && fx.cageLit > 0) {
       fx.tierPulse = Math.max(0, (fx.tierPulse || 0) - 0.012);
       const c = tierPos(), rz = (gwCount() - 1) * 0.45 + 1, ry = (gwCount() - 1) * 0.9 + 1.2, N = 56, pts = [];
       for (let k = 0; k < N; k++) { const a = (k / N) * Math.PI * 2; pts.push(add(c, [0, Math.sin(a) * ry, Math.cos(a) * rz])); }
-      lines(pts, chain(N, true), C.carrier, 0.35 + 0.6 * fx.tierPulse, 1 + fx.tierPulse);
+      // Faint once the carrier is known, so it does not read as an edge to the unused ones.
+      if (carrier >= 0) lines(pts, chain(N, true), C.carrier, 0.12 + 0.2 * fx.tierPulse, 1, { glow: false });
+      else lines(pts, chain(N, true), C.carrier, 0.35 + 0.6 * fx.tierPulse, 1 + fx.tierPulse);
     }
     // Packets ride the carrier's tunnel while the work runs.
     if (carrier >= 0 && fx.cageLit > 0 && fx.spark > 0) {
@@ -889,19 +800,48 @@ function drawStations() {
   // The audiences the workload named: where the gateways let it reach.
   const auds = audList();
   if (auds.length && act >= 7) {
-    const from = carrier >= 0 ? [gwPos(carrier)] : Array.from({ length: Math.min(gws, gwCount()) }, (_, i) => gwPos(i));
+    const from = egressTo();
     auds.forEach((_, i) => {
       const a = audPos(i);
       draw(SHAPES.audience, a, C.ident, 0.85, { ry: t * 0.5 + i });
-      // Allowed, and reached by some tunnel once checks are seen; which audience each tunnel
-      // was for is not reported.
-      const reached = (egressOf().checks || 0) > 0;
-      if (fx.cageLit > 0) for (const f of from) lines([f, a], [[0, 1]], carrier >= 0 || reached ? C.carrier : C.ident, (reached ? 0.45 : 0.3) * fx.cageLit, 1, { dash: reached ? [6, 3] : [2, 6], dashOffset: -clock * 16, glow: false });
+      // An edge only once tunnels are seen, from the one place traffic left by; which audience
+      // each tunnel was for is not reported.
+      if (from && fx.cageLit > 0) lines([from, a], [[0, 1]], C.carrier, 0.5 * fx.cageLit, 1.2, { glow: false });
     });
   }
   if (fx.spark > 0) {
     draw(SHAPES.spark, ST.cage, C.wire, fx.spark, { ry: t * 2.2, rx: t * 1.3, scale: 0.8 + 0.15 * Math.sin(t * 5) });
     draw(ring(0.55, 24), ST.cage, C.wire, fx.spark * 0.6, { rx: t * 1.7, ry: t });
+  }
+
+  // SPIRE: lit once this claim's entries are on the server. One edge in, from the API whose
+  // ClusterStaticEntries its controller manager renders, and one out, to the VM, once the
+  // guest's agent has attested and holds the identities.
+  drawSpire(entriesShown() || attested(), t);
+  if (entriesShown() && act >= 5 && act < 9) lines(BASE_EDGES.entries(), [[0, 1]], C.spire, 0.55, 1.2, { glow: false });
+  if (svidLive()) lines([add(ST.spire, [0.6, -1.2, 0.4]), add(ST.vm, [-1.6, 1.4, -1.4])], [[0, 1]], C.spire, 0.75, 1.3, { dash: [3, 5], dashOffset: -clock * 14 });
+  // The VM's vTPM attestation, as in the Admin view: its SPIRE agent proved the VM with its TPM
+  // at boot and holds the node SVID from then on.
+  if (vtpmLive()) { const pts = vtpmPts(); lines(pts, chain(pts.length), C.spire, view.sel?.id === 'vtpm' ? 0.85 : 0.45, view.sel?.id === 'vtpm' ? 1.4 : 1.1, { dash: [3, 5], glow: false }); }
+  // OpenBao: the transit key glows once the seal has used it. One edge, from the broker.
+  const bOn = act >= 6 && (sealedCount() > 0 || fx.sealLit > 0);
+  drawBao(bOn, t);
+  if (bOn) lines(BASE_EDGES.transit(), [[0, 1]], C.seal, 0.45, 1, { glow: false });
+  // Their one standing link, OpenBao's PKI as SPIRE's upstream CA: not traffic of this run,
+  // so drawn only while one of the two is picked.
+  if (['spire', 'openbao', 'pki'].includes(view.sel?.id)) lines(BASE_EDGES.pki(), [[0, 1]], C.spire, 0.5, 1, { dash: [4, 6], glow: false });
+
+  // The SandboxPolicy, and the one edge it has: the broker reads its signed bundle.
+  const pol = policyOf(), pface = Math.atan2(cam.pos[0] - ST.policy[0], cam.pos[2] - ST.policy[2]);
+  draw(SHAPES.policyDoc, ST.policy, C.policy, pol.name ? 0.95 : 0.3, { ry: pface + Math.sin(t * 0.5) * 0.15, scale: 1.1 });
+  if (pol.name && act >= 4) lines([add(ST.policy, [0, -1.2, 0]), add(ST.broker, [0, 1.2, 0])], [[0, 1]], C.policy, 0.4, 1, { glow: false });
+  // The authorization checkpoints, facing the camera.
+  for (const a of authzPoints()) {
+    if (!a.show()) continue;
+    const col = C[AUTHZ_COLOR[a.state]], f = Math.atan2(cam.pos[0] - a.at[0], cam.pos[2] - a.at[2]);
+    const al = a.state === 'pending' ? 0.55 : 1, sel = view.sel?.id === a.id ? 1.25 : 1;
+    draw(SHAPES.shield, a.at, a.state === 'pending' ? C.ink : col, al, { ry: f, scale: sel, width: a.state === 'pending' ? 1 : 1.5 });
+    draw(a.state === 'ok' ? SHAPES.shieldOk : a.state === 'bad' ? SHAPES.shieldBad : SHAPES.shieldIdle, a.at, a.state === 'pending' ? C.ink : col, al, { ry: f, scale: sel, width: 1.5 });
   }
 
   // The end: a ring, and the exit code in it.
@@ -1003,7 +943,7 @@ function drawFx(dt) {
 
 // Live, the director frames the run; free, the camera is the viewer's: it flies to what was
 // clicked and pans, orbits and zooms around it until "Follow live" (or Esc) hands it back.
-const view = { mode: 'live', sel: null, hover: null, target: [0, 0, 0], off: [-3, 3, 11] };
+const view = { mode: 'live', sel: null, hover: null, target: ST.you.slice(), off: [-3, 3, 11] };
 function wantCamera() {
   if (view.mode === 'free') return { pos: add(view.target, view.off), target: view.target };
   if (hop) return hopPose();
@@ -1020,7 +960,8 @@ function restPose(act) {
   if (act === 6) return follow(add(ST.api, [1.4, -0.2, 0.6]), [-3, 3.6, 11]);
   if (act === 7) return follow(add(ST.vm, [0.8, 0, 0]), [-3.4, 3.6, 11]);
   if (act === 8) return follow(add(ST.vm, [2.8, 1.4, 0.4]), [-4, 3.6, 15]);
-  return follow(mix(ST.vm, ST.end, 0.6), [-3, 5.5, 19]);
+  // From above and behind the VM, so the leg to the exit runs up the screen.
+  return follow(add(mix(ST.vm, ST.end, 0.45), [2.5, 0, 0]), [-5, 16, 23]);
 }
 
 // A hop from one node to the next: the camera lifts off and pulls back until the whole leg
@@ -1109,6 +1050,8 @@ const NODES = [
   { id: 'broker', name: () => 'Broker', at: () => ST.broker, r: 2.3, off: [-3, 3, 11], show: always },
   { id: 'api', name: () => 'Kubernetes API', at: () => ST.api, r: 2.3, off: [-3, 3.2, 11], show: always },
   { id: 'vault', name: () => 'Secrets vault', at: () => ST.vault, r: 1.3, off: [-2.4, 2.4, 8], show: always },
+  { id: 'openbao', name: () => 'OpenBao', at: () => ST.bao, r: 1.4, off: [-2.4, 2.6, 9], show: always },
+  { id: 'spire', name: () => 'SPIRE server', at: () => ST.spire, r: 1.8, off: [-3, 2.6, 11], show: always },
   ...Array.from({ length: MAX_BOX }, (_, i) => ({
     id: `box${i}`, name: () => boxShort(boxes()[i]) || `box ${i + 1}`, at: () => boxAt(i), r: 0.32, off: [-1, 1.2, 5.5],
     show: () => vault.open > 0.6 && i < boxes().length, inside: 'vault',
@@ -1126,6 +1069,10 @@ const NODES = [
     show: () => i < audList().length && D.act >= 7,
   })),
   { id: 'end', name: () => 'Exit', at: () => ST.end, r: 2.8, off: [-3, 3, 12], show: always },
+  { id: 'policy', name: () => 'SandboxPolicy', at: () => ST.policy, r: 1.4, off: [-2.5, 2, 9], show: always },
+  ...['authz-broker', 'authz-api', 'authz-gw'].map((id) => ({
+    id, name: () => `Authz: ${authzById(id).name}`, at: () => authzById(id).at, r: 0.6, off: [-1.8, 1.4, 7], show: () => authzById(id).show(),
+  })),
 ];
 const legPts = (leg) => Array.from({ length: 41 }, (_, i) => legAt(leg, i / 40));
 const EDGES = [
@@ -1135,9 +1082,15 @@ const EDGES = [
   { id: 'api', name: 'Broker → API', pts: () => legPts(LEGS.api), show: always },
   { id: 'vm', name: 'API → VM', pts: () => legPts(LEGS.vm), show: always },
   { id: 'jail', name: 'Jail → proxy', pts: () => [ST.cage, PROXY], show: () => D.act >= 7 },
-  { id: 'tunnel', name: 'Proxy → gateway', pts: () => [PROXY, gwPos(Math.max(0, carrierIdx() >= 0 ? carrierIdx() : Math.floor(gwCount() / 2)))], show: () => D.act >= 7 && gwList().length > 0 },
-  { id: 'upstream', name: 'Gateway → audience', pts: () => audList().length ? [gwPos(Math.max(0, carrierIdx() >= 0 ? carrierIdx() : Math.floor(gwCount() / 2))), audPos(0)] : [], show: () => D.act >= 7 && audList().length > 0 },
+  { id: 'tunnel', name: 'Proxy → gateway', pts: () => [PROXY, egressTo() || tierPos()], show: () => D.act >= 7 && gwList().length > 0 },
+  { id: 'upstream', name: 'Gateway → audience', pts: () => audList().length ? [egressTo() || tierPos(), audPos(0)] : [], show: () => D.act >= 7 && audList().length > 0 },
   { id: 'end', name: 'VM → exit', pts: () => legPts(LEGS.end), show: always },
+  { id: 'transit', name: 'Broker → OpenBao', pts: BASE_EDGES.transit, show: () => D.act >= 6 && sealedCount() > 0 },
+  { id: 'entries', name: 'API → SPIRE', pts: BASE_EDGES.entries, show: () => entriesShown() && D.act >= 5 && D.act < 9 },
+  { id: 'svid', name: 'SPIRE → VM', pts: () => [add(ST.spire, [0.6, -1.2, 0.4]), add(ST.vm, [-1.6, 1.4, -1.4])], show: () => svidLive() },
+  { id: 'vtpm', name: 'VM vTPM → SPIRE', pts: vtpmPts, show: () => vtpmLive() },
+  { id: 'pki', name: 'OpenBao → SPIRE', pts: BASE_EDGES.pki, show: () => ['spire', 'openbao', 'pki'].includes(view.sel?.id) },
+  { id: 'bundle', name: 'Policy → broker', pts: () => [add(ST.policy, [0, -1.2, 0]), add(ST.broker, [0, 1.2, 0])], show: () => !!policyOf().name && D.act >= 4 },
 ];
 const nodeById = (id) => NODES.find((n) => n.id === id);
 const edgeById = (id) => EDGES.find((e) => e.id === id);
@@ -1266,6 +1219,7 @@ function frame(now) {
   drawFx(dt);
   drawSelection();
   ctx.globalCompositeOperation = 'source-over';
+  flushTerm();
   updateLabels();
   updateCards();
   placeLabels();
@@ -1293,14 +1247,14 @@ function who(fallback = 'you') {
   return id.username || se.login || id.email || id.display || id.subject || fallback;
 }
 const L = {
-  issuer: label(add(ST.issuer, [1.6, 1.2, 0]), 'ident', 'issuer'),
-  broker: label(add(ST.broker, [2.2, 0.8, 0]), '', 'broker'),
-  api: label(add(ST.api, [2.2, 1.2, 0]), '', 'api'),
-  vault: label(add(ST.vault, [0.9, 0.9, 0]), 'seal', 'vault'),
-  vm: label(add(ST.vm, [2.3, 1.6, 0]), '', 'vm'),
-  cage: label(add(ST.cage, [-0.6, -1.3, 1]), '', 'cage'),
-  end: label(add(ST.end, [2.8, 1.2, 0]), '', 'end'),
-  you: label(add(ST.you, [1.4, 1.0, 0]), '', 'you'),
+  issuer: label(() => add(ST.issuer, [1.6, 1.2, 0]), 'ident', 'issuer'),
+  broker: label(() => add(ST.broker, [2.2, 0.8, 0]), '', 'broker'),
+  api: label(() => add(ST.api, [2.2, 1.2, 0]), '', 'api'),
+  vault: label(() => add(ST.vault, [0.9, 0.9, 0]), 'seal', 'vault'),
+  vm: label(() => add(ST.vm, [2.3, 1.6, 0]), '', 'vm'),
+  cage: label(() => add(ST.cage, [-0.6, -1.3, 1]), '', 'cage'),
+  end: label(() => add(ST.end, [2.8, 1.2, 0]), '', 'end'),
+  you: label(() => add(ST.you, [1.4, 1.0, 0]), '', 'you'),
   env: label(() => add(env.pos, [0.9, 0.5, 0])),
 };
 L.issuer.lit = () => D.act >= 1;
@@ -1319,8 +1273,8 @@ const BOXL = Array.from({ length: MAX_BOX }, (_, i) => Object.assign(label(() =>
 // Small parts are labelled only when the camera is close enough to read them, or when picked.
 const near = (at, dist, id) => len(sub(cam.pos, at)) < dist || view.sel?.id === id || view.hover?.id === id;
 L.tier = Object.assign(label(() => add(tierPos(), [0, (gwCount() - 1) * 0.9 + 1.7, 0]), 'carrier', null), { show: () => D.act >= 7 && (egressOf().checks || 0) > 0 });
-L.guest = Object.assign(label(add(GUEST, [-0.6, -0.55, 0.3]), '', 'guest'), { show: () => D.act >= 7 && near(GUEST, 15, 'guest') });
-L.proxy = Object.assign(label(add(PROXY, [0.3, -0.55, 0.3]), '', 'proxy'), { show: () => D.act >= 7 && near(PROXY, 15, 'proxy') });
+L.guest = Object.assign(label(() => add(GUEST, [-0.6, -0.55, 0.3]), '', 'guest'), { show: () => D.act >= 7 && near(GUEST, 15, 'guest') });
+L.proxy = Object.assign(label(() => add(PROXY, [0.3, -0.55, 0.3]), '', 'proxy'), { show: () => D.act >= 7 && near(PROXY, 15, 'proxy') });
 L.cage.show = () => D.act >= 7 && near(ST.cage, 17, 'cage');
 GWL.forEach((l, i) => { const base = l.show; l.show = () => base() && (near(gwPos(i), 20, `gw${i}`) || i === carrierIdx()); });
 L.env.show = () => env.scale > 0.5 && env.sink < 0.5 && D.busy && [4, 5, 7].includes(D.act);
@@ -1329,7 +1283,14 @@ L.vault.show = () => D.act >= 5 && vault.open < 0.4;
 L.api.show = () => vault.open < 0.4;
 L.broker.show = () => vault.open < 0.4;
 L.you.show = () => D.act >= 4 && !CARDS.you.shown;
-L.form = Object.assign(label(add(ST.form, [2.2, 1.6, 0]), '', 'form'), { show: () => D.act >= 4 && !CARDS.form.shown });
+L.policy = label(() => add(ST.policy, [1.3, 1.1, 0]), 'policy', 'policy');
+L.spire = label(() => add(ST.spire, [1.3, 1.6, 0]), 'spire', 'spire');
+L.spire.lit = () => entriesSet() || attested();
+L.openbao = label(() => add(ST.bao, [1.1, 1.0, 0]), 'seal', 'openbao');
+L.openbao.lit = () => D.act >= 6 && sealedCount() > 0;
+L.openbao.show = () => vault.open < 0.4;
+const AUTHZL = ['authz-broker', 'authz-api', 'authz-gw'].map((id) => Object.assign(label(() => add(authzById(id).at, [0.55, 0.35, 0]), 'authz', id), { id, show: () => authzById(id).show() && (near(authzById(id).at, 16, id) || authzById(id).state === 'bad') }));
+L.form = Object.assign(label(() => add(ST.form, [2.2, 1.6, 0]), '', 'form'), { show: () => D.act >= 4 && !CARDS.form.shown });
 L.you.lit = () => true;
 
 function updateLabels() {
@@ -1341,6 +1302,11 @@ function updateLabels() {
   setLabel(L.api, 'Kubernetes API', claim.name ? `AgentSandbox ${claim.namespace ? claim.namespace + '/' : ''}${claim.name}` : 'AgentSandbox');
   const ks = (d.seal.kubeSecrets || []).length;
   setLabel(L.vault, 'Secrets', ks ? `${ks} in ${d.seal.brokerNamespace || 'the broker namespace'}, sealed` : 'sealed at rest');
+  {
+    const sp = spireOf(), es = entries();
+    setLabel(L.spire, 'SPIRE', sp.error ? 'entries not readable' : es.length ? `${es.filter((e) => e.set).length} of ${es.length} entries set${attested() ? ' · agent attested' : ''}` : attested() ? 'agent attested' : 'no entry for this claim yet');
+    setLabel(L.openbao, 'OpenBao', D.act >= 6 && ks ? `transit key · ${ks} envelope${ks === 1 ? '' : 's'}` : 'transit key');
+  }
   const vm = vmOf();
   const ip = (vm.addresses || [])[0]?.split(' ')[0];
   setLabel(L.vm, 'Sandbox VM', [vm.name, ip].filter(Boolean).join(' · ') || 'a member of the pool');
@@ -1365,6 +1331,14 @@ function updateLabels() {
   setLabel(L.env, claim.name ? `claim ${claim.name}` : 'claim', `as ${who()}`);
   setLabel(L.you, 'You', who('this laptop'));
   setLabel(L.form, 'sandbox create', 'sheet 02');
+  const pol = policyOf();
+  setLabel(L.policy, 'SandboxPolicy', pol.name ? pol.name + (pol.version ? ` · bundle ${pol.version}` : '') : 'none named');
+  const said = { ok: 'allowed', bad: 'refused', gaps: 'allowed, with gaps', pending: 'not yet' };
+  for (const l of AUTHZL) {
+    const a = authzById(l.id);
+    setLabel(l, `authz · ${a.name}`, said[a.state]);
+    for (const k of ['ok', 'bad', 'gaps']) l.el.classList.toggle(k, a.state === k);
+  }
 }
 
 // ------------------------------------------------------------------------------ the two cards
@@ -1380,6 +1354,23 @@ const CARDS = {
 for (const card of Object.values(CARDS)) {
   card.el.addEventListener('click', () => select('node', card.node));
 }
+
+// What a Ctrl-drag of each node moves (the layout, theatre.js): the station, and what stands
+// on it or is placed from it. The gateways, the audiences and the vault's boxes follow theirs.
+const MOVABLE = {
+  you: () => [ST.you, PAPERS.login.home, PAPERS.login.c, POSE.login.pos, POSE.login.target, CARDS.you.c],
+  form: () => [ST.form, PAPERS.create.home, PAPERS.create.c, POSE.create.pos, POSE.create.target, CARDS.form.c],
+  issuer: () => [ST.issuer],
+  broker: () => [ST.broker],
+  api: () => [ST.api],
+  vault: () => [ST.vault],
+  openbao: () => [ST.bao],
+  spire: () => [ST.spire],
+  policy: () => [ST.policy],
+  vm: () => [ST.vm, PROXY, GUEST],
+  end: () => [ST.end],
+};
+const moveNode = (id, d) => shiftPoints(MOVABLE[id](), d);
 
 // The rolodex: the front card (under the page's card), the cards fanned behind it on the
 // rod, the two wheels and the stand.
@@ -1604,16 +1595,15 @@ function paintFailure() {
 
 // ------------------------------------------------------------------------------ output
 
+// Lines on the page: the latest only (the copy button takes every line, from model.lines).
+const TERM_MAX = 2000;
+let termPending = [];
 function outputLine(e) {
   model.lines.push(e);
-  const pre = $('lines');
-  const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
-  const span = document.createElement('span');
-  if (e.stream === 'stderr') span.className = 'stderr';
-  span.textContent = e.text + '\n';
-  pre.append(span);
-  if (atEnd) pre.scrollTop = pre.scrollHeight;
-  $('term-count').textContent = String(model.lines.length);
+  // Written once a frame (flushTerm), not once a line: reading the scroll position after each
+  // append forced a layout of the whole output per line, and a burst of pip or mkdocs output
+  // dropped the scene to a few frames a second.
+  termPending.push(e);
   // Output arrives in batches: the lines queue and float up one at a time (drawFx), the
   // latest few only, so a batch is not drawn as one pile of text.
   fx.floatQueue.push({ text: e.text.slice(0, 40), color: e.stream === 'stderr' ? C.bad : C.wire });
@@ -1622,6 +1612,23 @@ function outputLine(e) {
 }
 // The output opens on its own once the work runs, unless the viewer closed the inspector or
 // is looking at something else in it.
+function flushTerm() {
+  if (!termPending.length) return;
+  const pre = $('lines'), batch = termPending.slice(-TERM_MAX);
+  termPending = [];
+  const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+  const frag = document.createDocumentFragment();
+  for (const e of batch) {
+    const span = document.createElement('span');
+    if (e.stream === 'stderr') span.className = 'stderr';
+    span.textContent = e.text + '\n';
+    frag.append(span);
+  }
+  pre.append(frag);
+  for (let extra = pre.childElementCount - TERM_MAX; extra > 0; extra--) pre.firstChild.remove();
+  if (atEnd) pre.scrollTop = pre.scrollHeight;
+  $('term-count').textContent = String(model.lines.length);
+}
 function showTermAuto() {
   if (!inspDismissed && !view.sel && model.lines.length && !inspOpen()) openInspector('output');
 }
@@ -1711,10 +1718,12 @@ const pre = (text) => (text ? el('pre', null, text) : el('p', 'empty', 'not run 
 // Which stage each node and edge belongs to, for its state.
 function stepOf(sel) {
   const id = sel.id;
-  if (sel.kind === 'edge') return { login: 'mint', form: 'create', broker: 'create', api: 'create', vm: 'run', jail: 'run', tunnel: 'run', upstream: 'run', end: 'exit' }[id];
+  if (sel.kind === 'edge') return { login: 'mint', form: 'create', broker: 'create', api: 'create', vm: 'run', jail: 'run', tunnel: 'run', upstream: 'run', end: 'exit', bundle: 'create', transit: 'seal', pki: 'seal', entries: 'run', svid: 'run' }[id];
   if (id.startsWith('box')) return 'seal';
+  if (id === 'authz-gw') return 'run';
+  if (id === 'policy' || id.startsWith('authz')) return 'create';
   if (id.startsWith('gw') || id.startsWith('aud')) return 'run';
-  return { you: 'mint', form: 'create', issuer: 'mint', broker: 'create', api: 'create', vault: 'seal', vm: 'run', guest: 'run', proxy: 'run', cage: 'run', end: 'exit' }[id];
+  return { you: 'mint', form: 'create', issuer: 'mint', broker: 'create', api: 'create', vault: 'seal', openbao: 'seal', spire: 'run', vm: 'run', guest: 'run', proxy: 'run', cage: 'run', end: 'exit' }[id];
 }
 
 // ---- TLS, as Recess's own handshake saw it
@@ -1857,6 +1866,37 @@ function spiffeOf() {
 
 // ---- what each node and edge is, from the top down
 
+// The checks, as a list: every one, or those at one place; each marked as Recess sees it.
+function authzList(at) {
+  const r = claimRefusal(), state = Object.fromEntries(authzPoints().map((a) => [a.id, a.state]));
+  // A refusal the broker named marks its check; the checks before it passed, those after it
+  // were never reached.
+  const hitAt = r ? AUTHZ_CHECKS.findIndex((c) => c.codes.includes(r.error)) : -1;
+  const rows = AUTHZ_CHECKS.map((c, i) => ({ c, i })).filter(({ c }) => !at || c.at === at).map(({ c, i }) => {
+    const hit = i === hitAt;
+    // Some outcomes never reach Recess: those are not marked passed just because the run went on.
+    const st = hit ? 'bad' : hitAt >= 0 ? (i < hitAt ? 'ok' : 'skipped') : c.unseen ? 'unseen' : state[c.at];
+    return { c, st };
+  });
+  const where = { 'authz-broker': 'broker', 'authz-api': 'Kubernetes API', 'authz-gw': 'gateway' };
+  const mark = { ok: 'passed', bad: 'refused', gaps: 'passed, with gaps', pending: 'not yet', unseen: 'not reported to you', skipped: 'not reached' };
+  return list(rows, ({ c, st }) => [`${c.what}  [${r && st === 'bad' && c.codes.includes(r.error) ? r.error : mark[st]}]`, `${at ? '' : where[c.at] + ' · '}on refusal: ${c.how}`, st === 'ok' ? 'ok' : st === 'bad' ? 'bad' : st === 'gaps' ? 'live' : '']);
+}
+function authzPanel(id, summary) {
+  const a = authzById(id), r = claimRefusal(), pol = policyOf(), eg = egressOf();
+  const evidence = {
+    'authz-broker': [['decision', r ? `${r.status} ${r.error}` : a.state === 'ok' ? 'the claim was taken' : null, 'seen'], ['detail', r?.detail, 'seen'], ['policy named', pol.name || 'none', pol.seenName ? 'seen' : 'reported']],
+    'authz-api': [['AgentSandbox', model.data.run.object?.metadata?.uid ? 'admitted' : null, 'seen'], ['PolicyConformant', pol.cond ? `${pol.cond.status} (${pol.cond.reason || ''})` : null, 'seen'], ['refused', pol.refused, 'seen'], ['bundle in the record', pol.version, 'seen']],
+    'authz-gw': [['tunnels allowed', eg.checks || null, eg.source === 'demo' ? 'reported' : 'seen'], ['denials', 'not reported to you: the gateway logs them, and ADR-0062 sends them to the broker', 'design']],
+  }[id];
+  return {
+    title: `Authz: ${a.name}`, summary,
+    glance: [['state', { ok: 'allowed', bad: 'refused', gaps: 'allowed, with gaps (shadow)', pending: 'not decided yet' }[a.state], 'seen'], ...evidence],
+    sections: [['The checks here, in order', authzList(id)]],
+    raw: null,
+  };
+}
+
 function describe(sel) {
   const d = model.data, n = model.notes, id = d.mint.identity || {}, se = d.mint.session || {};
   const w = d.create.workload || {}, claim = d.create.claim || {}, obj = d.run.object || {};
@@ -1967,6 +2007,30 @@ function describe(sel) {
       ],
       raw: { workload: w, claim, tls: tlsSeen.broker.data },
     }),
+    policy: () => {
+      const pol = policyOf(), c = pol.cond;
+      return {
+        title: 'SandboxPolicy', summary: 'notaio\'s policy, named by the claim in spec.policyRef. notaio signs it into a bundle beside it; the broker verifies the bundle and authorizes by it. mediatore has no default policy: a claim that names none is held only to the broker\'s own checks.',
+        glance: [
+          ['name', pol.name || 'none named', pol.seenName ? 'seen' : 'reported'],
+          ['bundle version', pol.version, 'seen'], ['policy uid', pol.uid, 'seen'],
+          ['conformant', c ? `${c.status} (${c.reason || ''})${c.message ? ': ' + c.message : ''}` : null, 'seen'],
+          ['refused', pol.refused, 'seen'],
+        ],
+        sections: [
+          ['Where the claim is authorized, in order', authzList(null)],
+          ['The signed bundle', stack([
+            layer('ConfigMap', `${pol.name || '<policy>'}-bundle, in the policy's namespace`, [['managed by', 'notaio', 'design'], ['envelope', 'bundle.dsse.json (DSSE), checked against the broker\'s trusted keys', 'design'], ['fresh for', 'about 15 minutes (notAfter); notaio re-signs it', 'design']]),
+            layer('Content', 'what the broker reads', [['audiences', 'name, ttlSeconds, rules, endpoints', 'design'], ['lease', 'maxDurationSeconds', 'design'], ['egress', 'direct host:port the claim may reach (ADR-0030)', 'design']]),
+          ])],
+          ['Not in the policy', facts([['images', 'the registries the pool reaches: broker config', 'design'], ['pools', 'broker config', 'design'], ['who may claim where', 'the namespace\'s groups: broker config (ADR-0046)', 'design']])],
+        ],
+        raw: { policyRef: pol.name ? { name: pol.name } : null, record: { policyUid: pol.uid || null, bundleVersion: pol.version || null }, condition: c, reason: pol.refused || null },
+      };
+    },
+    'authz-broker': () => authzPanel('authz-broker', 'The broker decides whether to take the claim at all, at POST /v1/claims, before anything is written: who you are, where, what for, under which policy. A refusal comes back to you as the broker\'s error, and nothing is created.'),
+    'authz-api': () => authzPanel('authz-api', 'Kubernetes admits the AgentSandbox the broker writes, and the broker\'s reconciler then holds it to the policy: a bundle it has verified, and the sandbox measured against it.'),
+    'authz-gw': () => authzPanel('authz-gw', 'While the work runs, every tunnel out and every credential the proxy places is asked of the authorizer on the gateway, which asks the broker for the claim\'s egress. Decided per connection, never once for the run.'),
     api: () => ({
       title: 'Kubernetes API', summary: 'Holds the AgentSandbox, the claim\'s record, which the pool binds a VM to.',
       glance: [['AgentSandbox', obj.metadata?.name || claim.name, 'seen'], ['phase', obj.status?.phase || claim.phase, 'seen'], ['namespace', obj.metadata?.namespace || claim.namespace, 'seen']],
@@ -1980,6 +2044,57 @@ function describe(sel) {
       ],
       raw: obj,
     }),
+    spire: () => {
+      const sp2 = spireOf(), es = entries();
+      const entryLayers = es.map((e) => layer(e.name, e.name.startsWith('mediatore-claim-') ? 'the claim\'s entry: the egress proxy\'s identity' : 'the node\'s entry: the guest agent\'s identity', [
+        ['SPIFFE ID', e.spiffeId, 'seen'], ['parent (agent)', e.parentId, 'seen'], ['selectors', (e.selectors || []).join(', '), 'seen'],
+        ['SVID lifetime', e.ttl || null, 'seen'], ['class', e.className, 'seen'],
+        ['rendered', e.rendered == null ? null : e.rendered ? 'yes' : 'no', 'seen'], ['on the server', e.set == null ? null : e.set ? 'yes (set)' : 'not yet', 'seen'],
+        ['masked', e.masked ? 'yes: another entry shadows it' : null, 'seen'], ['declared', e.created, 'seen'],
+      ]));
+      return {
+        title: 'SPIRE server', summary: DESIGN.spire.summary,
+        glance: [['trust domain', sp.td || null, sp.agent ? 'seen' : 'derived'], ['entries', sp2.error ? null : es.length ? `${es.filter((e) => e.set).length} of ${es.length} set` : 'none yet', 'seen'],
+          ['node agent', sp.agent || null, 'seen'], ['entries readable', sp2.error ? `no: ${sp2.error}` : null, 'seen']],
+        sections: [
+          ['This claim\'s entries', entryLayers.length ? stack(entryLayers) : el('p', 'empty', sp2.error ? 'This kubeconfig may not read clusterstaticentries (spire.spiffe.io, cluster-scoped).' : entriesWereSet ? 'Deleted at the release: the claim SVID can no longer be issued or renewed.' : 'None yet: the broker declares them when the claim is bound, and deletes them at the release.')],
+          ['The identities on this run', stack([
+            layer('Broker', `spiffe://${td}/mediatore`, [['from', 'the SPIRE agent on its Kubernetes node, through the SPIFFE CSI driver; in memory only (ADR-0007)', 'design']]),
+            layer('Guest agent (node SVID)', nodeSvid, [['selectors', 'unix:uid:0 and unix:path:/usr/bin/mediatore', 'design'], ['used for', 'the broker\'s sandbox listener: GET /v1/me, output, exit', 'design']]),
+            layer('Egress proxy (claim SVID)', claimSvid, [['selectors', 'unix:user:<sandbox user>; the jail has none', 'design'], ['lives', 'while the entry exists, at most its SVID lifetime', 'design'], ['used for', 'tunnels to the gateways, tokens from the broker', 'design']]),
+            layer('Gateway', `spiffe://${td}/gateway and /gateway/authorizer`, [['used for', 'Envoy\'s listener, and the authorizer asking the broker (ADR-0053)', 'design']]),
+          ])],
+          ['How the guest gets them', stack([
+            layer('Node attestation', 'the VM\'s TPM (ADR-0018), or x509pop with a certificate its host signs (ADR-0049)', [['agent ID', sp.agent || `spiffe://${td}/spire/agent/tpm/<ek hash>`, sp.agent ? 'seen' : 'design'], ['trust bundle', 'fetched at every boot through the gateway relay, port 3131 (ADR-0037)', 'design']]),
+            layer('Workload API', 'the agent\'s socket in the guest', [['hands out', 'the node SVID to the guest agent, the claim SVID to the proxy, by the selectors above', 'design']]),
+          ])],
+          ['Its CA', stack([layer('Upstream authority', 'OpenBao PKI signs the server\'s intermediate CA', [['plugin', 'UpstreamAuthority "vault" (deploy/spire-upstream)', 'design']])])],
+        ],
+        raw: { entries: es },
+      };
+    },
+    openbao: () => {
+      const ks = model.data.seal.kubeSecrets || [];
+      const sbUid = obj.metadata?.uid;
+      return {
+        title: 'OpenBao', summary: DESIGN.openbao.summary,
+        glance: [['envelopes', ks.length || null, 'seen'], ['bound to', sbUid ? `the sandbox UID ${sbUid}` : null, 'derived'], ['broker logs in', 'with a projected ServiceAccount token, audience openbao (ADR-0015)', 'design']],
+        sections: [
+          ['What it sealed for this claim', ks.length ? list(ks, (k) => [boxShort(k), k.name]) : el('p', 'empty', 'nothing yet: the seal comes after the claim is accepted')],
+          ['The transit key', stack([
+            layer('Transit', 'encrypt and decrypt with a derived key (ADR-0015)', [
+              ['context', 'the sandbox UID: an envelope moved onto another claim does not open', 'design'],
+              ['envelope', 'key_id transit:<mount>/<key>; the vault:vN: ciphertext OpenBao returns', 'design'],
+              ['rotation', 'the version prefix keeps a rotated key readable', 'design'],
+              ['seals', 'the issuer session (refresh token), each delegated credential, each stored output batch (ADR-0052)', 'design'],
+            ]),
+            layer('The broker\'s login', 'Kubernetes auth', [['token', 'a projected ServiceAccount token, audience openbao, exchanged for a short-lived OpenBao token held in memory', 'design'], ['at rest', 'no OpenBao token, no key, nothing in a Secret or on disk', 'design']]),
+          ])],
+          ['PKI', stack([layer('SPIRE\'s upstream CA', 'signs the SPIRE server\'s intermediate, rotated every ca_ttl', [['used by', 'the SPIRE server, not the broker', 'design']])])],
+        ],
+        raw: null,
+      };
+    },
     vault: () => {
       const b = el('button', 'ghost small go', vault.want ? 'Close the vault' : 'Open the vault');
       b.type = 'button'; b.addEventListener('click', toggleVault);
@@ -1996,7 +2111,7 @@ function describe(sel) {
       }
       return {
         title: 'Secrets vault', summary: 'Your credentials at rest: Secrets in the broker\'s namespace, each sealed. Double-click it (or the button) to open its safety deposit boxes.',
-        glance: [['namespace', d.seal.brokerNamespace, 'seen'], ['Secrets', ks.length || gone.length ? `${ks.length}${gone.length ? ` (${gone.length} removed)` : ''}` : null, 'seen'], ['Recess reads', 'names, labels and annotations only, never the data', 'design']],
+        glance: [['namespace', d.seal.brokerNamespace, 'seen'], ['Secrets', ks.length || gone.length ? `${ks.length}${gone.length ? ` (${gone.length} removed)` : ''}` : null, 'seen'], ['Recess reads', 'names, labels and annotations only, never the data', 'design'], ['sealed with', 'OpenBao\'s transit key, bound to the sandbox UID', 'design']],
         sections: [
           ['Safety deposit boxes', ks.length || gone.length ? boxesList : el('p', 'empty', 'none yet')], ['', b],
           ['Custody: where each credential is', list(d.seal.secrets, (s2) => [s2.name, [s2.place, s2.presence, s2.sealed ? 'sealed' : '', s2.memory ? 'in memory' : '', s2.location, s2.note].filter(Boolean).join(' · '), s2.presence === 'held' ? 'live' : ''])],
@@ -2122,6 +2237,15 @@ function describe(sel) {
     };
   }
   const edges = {
+    transit: () => ({ title: 'Broker → OpenBao', summary: 'The broker asks OpenBao to encrypt each credential with the transit key, the sandbox UID as the key\'s context, and writes the envelope it gets back into a Secret. A read asks it to decrypt.', glance: [['envelopes', sealedCount() || null, 'seen']], sections: [['On the wire', stack([layer('HTTP', 'POST <mount>/encrypt/<key>, POST <mount>/decrypt/<key>', [['context', 'the sandbox UID', 'design'], ['auth', 'a short-lived OpenBao token from the Kubernetes login', 'design']]), layer('TLS', 'to OpenBao', [['trust', 'the configured CA', 'design']])])]], raw: null }),
+    entries: () => ({ title: 'Kubernetes API → SPIRE', summary: 'The broker writes ClusterStaticEntry objects; the SPIRE Controller Manager, leader-elected beside the server, renders them into entries over a private socket. The broker never connects to SPIRE.', glance: [['entries', entries().length || null, 'seen'], ['set', entries().filter((e) => e.set).length || null, 'seen']], sections: [['On the wire', stack([layer('Kubernetes API', 'create and delete clusterstaticentries (spire.spiffe.io)', [['as', 'the broker\'s service account; admission allows two shapes under /banlieue/ only (ADR-0006)', 'design']]), layer('Unix socket', 'controller manager → server, never on the network', [], [], '')])]], raw: { entries: entries() } }),
+    vtpm: () => ({ title: 'Sandbox VM → SPIRE: vTPM attestation', summary: 'The VM\'s SPIRE agent proves the VM to the SPIRE server with its virtual TPM: the endorsement key\'s certificate (published in VirtualMachine.status.tpmEndorsementCertificates) and a quote the TPM signs. The server answers with the node SVID, named after the EK\'s hash, which the VM holds from boot, warm in its pool, until it is recycled.', glance: [['agent', spiffeOf().agent || null, 'seen'], ['node SVID', spiffeOf().node || null, spiffeOf().nodeSeen ? 'seen' : 'derived']], sections: [['On the wire', stack([layer('TPM attestation', 'the SPIRE agent\'s tpm plugin (ADR-0018)', [['proves', 'the EK certificate, and a quote signed by the TPM', 'design'], ['agent ID', spiffeOf().agent || 'spiffe://<td>/spire/agent/tpm/<ek hash>', spiffeOf().agent ? 'seen' : 'design']]), layer('TLS', 'agent → server, through the gateway relay (ADR-0027)', [['trust', 'the bundle fetched at boot (ADR-0037)', 'design']])])]], raw: null }),
+    svid: () => ({ title: 'SPIRE → sandbox VM', summary: 'The guest\'s SPIRE agent attests the VM, then holds the node SVID and, while the claim\'s entry exists, the claim SVID; both rotate before they expire.', glance: [['agent', spiffeOf().agent || null, 'seen'], ['node SVID', spiffeOf().node || null, spiffeOf().nodeSeen ? 'seen' : 'derived']], sections: [['On the wire', stack([layer('SPIRE agent API', 'attestation, then SVID rotation', [['attestor', 'TPM, or x509pop with a host-signed certificate', 'design']]), layer('TLS', 'agent → server, through the gateway relay (ADR-0027)', [['trust', 'the bundle fetched at boot (ADR-0037)', 'design']])])]], raw: null }),
+    pki: () => ({ title: 'OpenBao → SPIRE', summary: 'OpenBao\'s PKI is the SPIRE server\'s upstream authority: it signs the server\'s intermediate CA. Not part of any one run, so it is drawn only while SPIRE or OpenBao is picked.', glance: [], sections: [['On the wire', stack([layer('HTTP', 'sign the intermediate CA, every ca_ttl', [['plugin', 'UpstreamAuthority "vault"', 'design']])])]], raw: null }),
+    bundle: () => {
+      const pol = policyOf();
+      return { title: 'SandboxPolicy → broker', summary: 'The broker\'s bundle reflector, on every replica, reads the signed bundle, checks notaio\'s signature, and records the newest version it has taken (a PolicyFloor) so an older bundle is never taken back.', glance: [['policy', pol.name, pol.seenName ? 'seen' : 'reported'], ['bundle version', pol.version, 'seen']], sections: [['On the wire', stack([layer('Kubernetes API', 'watch ConfigMaps labelled app.kubernetes.io/managed-by=notaio', [['as', 'the broker\'s service account: get, list, watch in the policy namespaces', 'design']]), layer('DSSE', 'bundle.dsse.json', [['verified', 'against the broker\'s trusted keys; refused if unsigned, stale or older than the floor', 'design']])])]], raw: null };
+    },
     login: () => ({ title: 'You → OIDC issuer', summary: 'Your browser signs you in; Recess takes the code on its loopback redirect and gets the ID token.', glance: [['issuer', issuer, 'seen'], ['state', model.steps.mint, 'seen']], sections: [['On the wire', stack([layer('OIDC', 'authorization code with PKCE', [['redirect', 'http://localhost on loopback', 'design'], ['note', n.mint, 'seen']]), ...tlsLayers('issuer', 443)])]], raw: null }),
     form: () => ({ title: 'Login → sandbox create', summary: 'The session the login wrote is what create sends: your ID token, and the refresh token it delegates. Nothing leaves this laptop until POST /v1/claims.', glance: [['session', se.path, 'seen'], ['ID token', id.fingerprint, 'seen']], sections: [['Handed over', stack([layer('Session file', se.path, [['mode', se.mode, 'seen'], ['ID token', se.idTokenFresh == null ? null : se.idTokenFresh ? 'fresh' : 'expired', 'seen'], ['refresh token', se.refreshToken, 'seen']]), layer('On this laptop', 'one process, no network', [['crossing', 'none: Recess reads the session it wrote', 'design']])])]], raw: null }),
     broker: () => ({ title: 'You → broker', summary: 'POST /v1/claims: the workload, your ID token and any delegated credential, sent once.', glance: [['broker', Cl.url, 'seen'], ['claim', claim.name, 'seen']], sections: [['On the wire', stack([layer('HTTP', 'POST /v1/claims', [['auth', 'Bearer <your ID token>', 'design'], ['delegate', w.delegate, 'reported']]), ...tlsLayers('broker', 443)])], ['Command', pre(d.create.command)]], raw: null }),
@@ -2154,7 +2278,7 @@ function renderDetails() {
   for (const [title, body] of info.sections) { if (title) box.append(el('h3', null, title)); box.append(body); }
   if (info.raw && (Array.isArray(info.raw) ? info.raw.length : Object.keys(info.raw).length)) {
     const det = el('details');
-    det.append(el('summary', null, 'raw'), el('pre', null, JSON.stringify(info.raw, null, 2)));
+    det.append(el('summary', null, 'raw (YAML)'), el('pre', null, toYaml(info.raw)));
     box.append(det);
   }
   box.scrollTop = scroll;
@@ -2264,6 +2388,7 @@ function reset(full) {
   loginInFlight = false;
   orbit.yaw = 0; orbit.pitch = 0; orbit.zoom = 1;
   $('lines').replaceChildren();
+  termPending = [];
   $('term-count').textContent = '';
   $('insp').hidden = true;
   inspDismissed = false;
@@ -2291,8 +2416,21 @@ function bindOrbit() {
   let drag = null;
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
+    // Ctrl: move the node under the pointer (the layout), at any point of the run.
+    if (e.ctrlKey && LAYOUT.editable) {
+      const hit = pick(e.clientX, e.clientY);
+      const m = hit?.kind === 'node' && MOVABLE[hit.id] && beginMove(e.clientX, e.clientY, nodeById(hit.id).at(), moveUpright(e.shiftKey));
+      if (m) {
+        drag = { move: m, id: hit.id, moved: false };
+        canvas.setPointerCapture(e.pointerId);
+        canvas.classList.add('moving');
+      }
+      return;
+    }
     if (!navigable()) return;
-    const pan = e.button === 2 || e.shiftKey;
+    // Pan: the right button, or the left with Shift or Cmd (Ctrl moves a node; on a Mac,
+    // Ctrl-click is also the right button).
+    const pan = e.button === 2 || e.shiftKey || e.metaKey;
     if (pan) freeCamera();
     drag = { x: e.clientX, y: e.clientY, yaw: orbit.yaw, pitch: orbit.pitch, pan, target: view.target.slice(), moved: false };
     canvas.setPointerCapture(e.pointerId);
@@ -2300,9 +2438,16 @@ function bindOrbit() {
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!drag) {
-      // Hover: what a click would pick.
+      // Hover: what a click would pick, or with Ctrl, what a drag would move.
+      const movable = e.ctrlKey && LAYOUT.editable ? pick(e.clientX, e.clientY) : null;
+      canvas.classList.toggle('movable', movable?.kind === 'node' && !!MOVABLE[movable.id]);
       view.hover = navigable() ? pick(e.clientX, e.clientY) : null;
       canvas.classList.toggle('pick', !!view.hover);
+      return;
+    }
+    if (drag.move) {
+      const d = drag.move.step(e.clientX, e.clientY);
+      if (len(d) > 0) { moveNode(drag.id, d); drag.total = add(drag.total || [0, 0, 0], d); drag.moved = true; }
       return;
     }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
@@ -2315,6 +2460,12 @@ function bindOrbit() {
     }
   });
   const end = (e) => {
+    if (drag?.move) {
+      if (drag.total) noteMove(drag.id, drag.total);
+      drag = null;
+      canvas.classList.remove('moving');
+      return;
+    }
     if (drag && !drag.moved && e.type === 'pointerup' && !drag.pan) {
       const hit = pick(e.clientX, e.clientY);
       if (hit) select(hit.kind, hit.id, { tab: hit.kind === 'node' && hit.id === 'cage' && model.lines.length ? 'output' : 'details' });
@@ -2331,6 +2482,13 @@ function bindOrbit() {
     orbit.zoom = clamp(orbit.zoom * Math.exp(e.deltaY * 0.001), 0.3, 3);
   }, { passive: false });
   canvas.addEventListener('dblclick', (e) => {
+    // Ctrl-double-click: the node back where the code stands it.
+    if (e.ctrlKey && LAYOUT.editable) {
+      const hit = pick(e.clientX, e.clientY);
+      const o = hit?.kind === 'node' && LAYOUT.moved[hit.id];
+      if (o) { const back = mul(o, -1); moveNode(hit.id, back); noteMove(hit.id, back); }
+      return;
+    }
     const hit = navigable() ? pick(e.clientX, e.clientY) : null;
     if (hit?.kind === 'node' && (hit.id === 'vault' || hit.id.startsWith('box'))) { if (hit.id === 'vault') toggleVault(); return; }
     orbit.yaw = 0; orbit.pitch = 0; orbit.zoom = 1;
@@ -2396,10 +2554,13 @@ async function init() {
   $('follow').addEventListener('click', followLive);
   $('linewrap').append(copyButton(() => model.lines.map((l) => l.text).join('\n')));
 
+  // The saved layout, before the first frame: each moved node where it was left.
+  for (const [id, d] of Object.entries(await loadLayout('agentsandbox'))) if (MOVABLE[id]) moveNode(id, d);
+  view.target = ST.you.slice();
   cfg = await (await fetch('/api/config')).json();
   cfg.login = cfg.login || {}; cfg.claim = cfg.claim || {};
   demo = !!cfg.demo;
-  if (demo) document.title = 'Recess Wired 3D (demo)';
+  if (demo) document.title = 'Recess AgentSandbox (demo)';
   // The sheets start from the server's settings (flags, environment, config file).
   fillForm(LOGIN_FORM, cfg.login);
   fillForm(CREATE_FORM, cfg.claim);

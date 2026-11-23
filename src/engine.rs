@@ -943,7 +943,29 @@ impl Run {
                     }
                 }
             }
+            // The claim's SPIRE entries (ADR-0006), once the record names the claim.
+            let claim_uid = obj
+                .as_ref()
+                .map(|o| str_at(o, "/status/claimUid").to_owned())
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| c.claim_uid.clone());
+            let spire = if warned.contains("spire") {
+                json!({"error": "not readable with this kubeconfig"})
+            } else {
+                match crate::kubeinfo::spire_entries(c.client.clone(), &claim_uid).await {
+                    Ok(entries) => json!({"entries": entries}),
+                    Err(e) => {
+                        warned.insert("spire");
+                        self.note(
+                            Step::Seal,
+                            format!("SPIRE entries (clusterstaticentries) not read: {e}"),
+                        );
+                        json!({"error": format!("{e}")})
+                    }
+                }
+            };
             let payload = json!({
+                "spire": spire,
                 "secrets": map,
                 "kubeSecrets": secrets,
                 "brokerNamespace": c.kube.broker_namespace,
@@ -1307,7 +1329,7 @@ fn read_ca(path: &str) -> anyhow::Result<Option<Vec<u8>>> {
         .map_err(|e| anyhow::anyhow!("CA file {path}: {e}"))
 }
 
-fn user_api(s: &ClaimSettings) -> anyhow::Result<Api> {
+pub(crate) fn user_api(s: &ClaimSettings) -> anyhow::Result<Api> {
     anyhow::ensure!(
         !s.url.is_empty(),
         "no user API URL: set MEDIATORE_URL or --mediatore"
@@ -1322,15 +1344,23 @@ fn user_api(s: &ClaimSettings) -> anyhow::Result<Api> {
 }
 
 pub(crate) async fn kube_client(k: &KubeTarget) -> anyhow::Result<kube::Client> {
+    Ok(kube::Client::try_from(kube_config(k).await?)?)
+}
+
+/// The cluster to talk to: `--kubeconfig` and `--context` when given; else `KUBECONFIG` or
+/// `~/.kube/config`, or, in a pod, its service account.
+pub(crate) async fn kube_config(k: &KubeTarget) -> anyhow::Result<kube::Config> {
     let opts = KubeConfigOptions {
         context: k.context.clone(),
         ..KubeConfigOptions::default()
     };
-    let cfg = match &k.kubeconfig {
-        Some(p) => kube::Config::from_custom_kubeconfig(Kubeconfig::read_from(p)?, &opts).await?,
-        None => kube::Config::from_kubeconfig(&opts).await?,
-    };
-    Ok(kube::Client::try_from(cfg)?)
+    Ok(match (&k.kubeconfig, &k.context) {
+        (Some(p), _) => {
+            kube::Config::from_custom_kubeconfig(Kubeconfig::read_from(p)?, &opts).await?
+        }
+        (None, Some(_)) => kube::Config::from_kubeconfig(&opts).await?,
+        (None, None) => kube::Config::infer().await?,
+    })
 }
 
 /// Each gateway as `name address` (its first address, without the type).

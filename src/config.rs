@@ -28,8 +28,15 @@ const LEGACY: &str = "LOW_TIDE_";
 /// A `LOW_TIDE_*` name as its `RECESS_*` twin; any other name as it is.
 #[must_use]
 pub fn current_name(key: &str) -> String {
-    key.strip_prefix(LEGACY)
-        .map_or_else(|| key.to_owned(), |rest| format!("RECESS_{rest}"))
+    let key = key
+        .strip_prefix(LEGACY)
+        .map_or_else(|| key.to_owned(), |rest| format!("RECESS_{rest}"));
+    // The Theme menu became the View menu, and RECESS_THEME its old name.
+    if key == "RECESS_THEME" {
+        "RECESS_VIEW".to_owned()
+    } else {
+        key
+    }
 }
 
 /// Give every `LOW_TIDE_*` variable of the environment to its `RECESS_*` twin when that is
@@ -41,7 +48,7 @@ pub fn current_name(key: &str) -> String {
 pub unsafe fn adopt_legacy_env() -> Vec<String> {
     let legacy: Vec<(String, std::ffi::OsString)> = std::env::vars_os()
         .filter_map(|(k, v)| k.into_string().ok().map(|k| (k, v)))
-        .filter(|(k, _)| k.starts_with(LEGACY))
+        .filter(|(k, _)| k.starts_with(LEGACY) || k == "RECESS_THEME")
         .collect();
     let mut adopted = Vec::new();
     for (k, v) in legacy {
@@ -109,10 +116,7 @@ pub fn parse(text: &str) -> Parsed {
 /// The default file's path.
 #[must_use]
 pub fn default_path() -> Option<PathBuf> {
-    let base = match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(d) if !d.is_empty() => PathBuf::from(d),
-        _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
-    };
+    let base = config_home()?;
     let current = base.join("recess").join("config.env");
     // Before the rename the file lived under low-tide: still read when there is no new one.
     let legacy = base.join("low-tide").join("config.env");
@@ -120,6 +124,20 @@ pub fn default_path() -> Option<PathBuf> {
         legacy
     } else {
         current
+    })
+}
+
+/// Where the 3D views' layout is kept (what Ctrl-drag moved): beside the default file.
+#[must_use]
+pub fn layout_path() -> Option<PathBuf> {
+    Some(config_home()?.join("recess").join("layout.json"))
+}
+
+/// `$XDG_CONFIG_HOME`, else `~/.config`.
+fn config_home() -> Option<PathBuf> {
+    Some(match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(d) if !d.is_empty() => PathBuf::from(d),
+        _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
     })
 }
 
@@ -258,8 +276,15 @@ pub const TEMPLATE: &str = r#"# Recess config: KEY=VALUE, the mediatore CLI's ow
 #RECESS_GATEWAY_PREFIX=gateway-
 #RECESS_NO_GATEWAYS=false
 #RECESS_LISTEN=127.0.0.1:7480
-#RECESS_THEME=classic
+#RECESS_VIEW=classic
 #RECESS_NO_OPEN=false
+# Shared behind Dex: everyone signs in, and the cluster is read with their own token
+# (deploy/README.md). Unset, the server is yours alone, on loopback.
+#RECESS_OIDC_ISSUER=https://dex.example.com
+#RECESS_OIDC_CLIENT_ID=kubernetes
+#RECESS_OIDC_AUDIENCE=
+#RECESS_OIDC_CLIENT_SECRET_FILE=
+#RECESS_PUBLIC_URL=https://recess.example.com
 #RECESS_DEMO=false
 #RECESS_DEMO_PACE=1
 "#;
@@ -286,6 +311,8 @@ mod tests {
         assert_eq!(current_name("LOW_TIDE_TTL"), "RECESS_TTL");
         assert_eq!(current_name("RECESS_TTL"), "RECESS_TTL");
         assert_eq!(current_name("MEDIATORE_URL"), "MEDIATORE_URL");
+        assert_eq!(current_name("RECESS_THEME"), "RECESS_VIEW");
+        assert_eq!(current_name("LOW_TIDE_THEME"), "RECESS_VIEW");
         let p = parse("LOW_TIDE_POOL=sandbox-pool\nRECESS_TTL=600\nOTHER=x\n");
         assert_eq!(
             p.pairs,

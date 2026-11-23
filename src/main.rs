@@ -6,6 +6,7 @@
 //! mediatore's own client crate for the login, the claim and the output, and the Kubernetes
 //! API for the `AgentSandbox`.
 
+mod admin;
 mod config;
 mod demo;
 mod egress;
@@ -14,8 +15,10 @@ mod form;
 mod kubeinfo;
 mod phases;
 mod probe;
+mod proxy;
 mod secrets;
 mod settings;
+mod signin;
 mod tui;
 mod util;
 mod web;
@@ -43,24 +46,71 @@ struct Cli {
 struct WebArgs {
     #[command(flatten)]
     common: Common,
-    /// Where to listen; loopback only
+    /// Where to listen: loopback only, unless everyone signs in (--oidc-issuer)
     #[arg(long, env = "RECESS_LISTEN", default_value = "127.0.0.1:7480")]
     listen: SocketAddr,
+    #[command(flatten)]
+    sign_in: SignIn,
     /// Print the link instead of opening the browser
     #[arg(long, env = "RECESS_NO_OPEN", value_parser = clap::builder::FalseyValueParser::new())]
     no_open: bool,
-    /// The theme a browser sees first; the page's dropdown changes it, and remembers
-    #[arg(long, env = "RECESS_THEME", value_enum, default_value_t = web::Theme::Classic)]
-    theme: web::Theme,
+    /// The view a browser sees first: classic, agentsandbox or admin; the page's View menu
+    /// changes it, and remembers (`--theme`, `RECESS_THEME`: its old names)
+    #[arg(long, alias = "theme", env = "RECESS_VIEW", value_enum, default_value_t = web::View::Classic)]
+    view: web::View,
+}
+
+/// Sign-in for a Recess shared beyond loopback: everyone signs in with this issuer (Dex), and
+/// the cluster is read with their own token, so their RBAC applies. Without an issuer, the
+/// server is yours alone: loopback, a key in the link, and your kubeconfig.
+#[derive(Args, Clone)]
+struct SignIn {
+    /// The issuer everyone signs in with; the Kubernetes API server must trust it
+    #[arg(long, env = "RECESS_OIDC_ISSUER", default_value = "")]
+    oidc_issuer: String,
+    /// The client Recess signs in as
+    #[arg(long, env = "RECESS_OIDC_CLIENT_ID", default_value = "kubernetes")]
+    oidc_client_id: String,
+    /// A file holding that client's secret (none for a public client)
+    #[arg(long, env = "RECESS_OIDC_CLIENT_SECRET_FILE", default_value = "")]
+    oidc_client_secret_file: String,
+    /// The audience the API server accepts, when it is not the client ID (asked of Dex as a
+    /// cross-client audience)
+    #[arg(long, env = "RECESS_OIDC_AUDIENCE", default_value = "")]
+    oidc_audience: String,
+    /// CA certificates (PEM) for the issuer
+    #[arg(long, env = "RECESS_OIDC_CA_FILE", default_value = "")]
+    oidc_ca_file: String,
+    /// A scope to request (repeatable); default `openid profile email groups offline_access`
+    #[arg(long = "oidc-scope", env = "RECESS_OIDC_SCOPES", value_delimiter = ',')]
+    oidc_scopes: Vec<String>,
+    /// Where browsers reach this server (https://recess.example.com); the issuer redirects to
+    /// <it>/auth/callback
+    #[arg(long, env = "RECESS_PUBLIC_URL", default_value = "")]
+    public_url: String,
+}
+
+impl SignIn {
+    fn settings(self) -> signin::Settings {
+        signin::Settings {
+            issuer: self.oidc_issuer,
+            client_id: self.oidc_client_id,
+            client_secret_file: self.oidc_client_secret_file,
+            audience: self.oidc_audience,
+            ca_file: self.oidc_ca_file,
+            scopes: self.oidc_scopes,
+            public_url: self.public_url,
+        }
+    }
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Serve the pipeline as a web page on loopback and open it. The page's Theme dropdown
-    /// switches between the stage cards (Classic) and the wireframe 3D journey (Wired 3D)
-    /// without touching the run.
+    /// Serve the pipeline as a web page on loopback and open it. The page's View menu
+    /// switches between the stage cards (Classic), the wireframe 3D journey (AgentSandbox,
+    /// `agentsandbox`) and every live agent in the cluster (Admin, `admin`) without touching the run.
     Web(WebArgs),
-    /// The same as `web --theme wired-3d`, kept for the name it had.
+    /// The same as `web --view agentsandbox`, kept for the name it had.
     #[command(name = "web-3d", hide = true)]
     Web3d(WebArgs),
     /// Show the pipeline in this terminal.
@@ -276,11 +326,14 @@ fn main() -> anyhow::Result<()> {
         .is_some_and(|p| p.components().any(|c| c.as_os_str() == "low-tide"));
     if !loaded.legacy.is_empty() || legacy_path {
         eprintln!(
-            "recess: still reading names from before the rename (Low Tide): {}{}; `recess config` shows them",
+            "recess: still reading older names: {}{}; `recess config` shows them",
             if loaded.legacy.is_empty() {
                 String::new()
             } else {
-                format!("{} LOW_TIDE_* variable(s)", loaded.legacy.len())
+                format!(
+                    "{} variable(s) (LOW_TIDE_*, RECESS_THEME)",
+                    loaded.legacy.len()
+                )
             },
             if legacy_path {
                 format!(
@@ -362,8 +415,8 @@ async fn run(cli: Cli, loaded: config::Loaded) -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Web(args) => serve_web(args, None, config_note).await,
         Cmd::Web3d(args) => {
-            eprintln!("recess: `web-3d` is now `web --theme wired-3d`");
-            serve_web(args, Some(web::Theme::Wired3d), config_note).await
+            eprintln!("recess: `web-3d` is now `web --view agentsandbox`");
+            serve_web(args, Some(web::View::AgentSandbox), config_note).await
         }
         Cmd::Tui { common } => {
             tui::run(common.login(), common.claim(), common.kube(), common.demo).await
@@ -372,20 +425,21 @@ async fn run(cli: Cli, loaded: config::Loaded) -> anyhow::Result<()> {
     }
 }
 
-/// `recess web`, with `theme` in place of `--theme` for the old `web-3d`.
+/// `recess web`, with `view` in place of `--view` for the old `web-3d`.
 async fn serve_web(
     args: WebArgs,
-    theme: Option<web::Theme>,
+    view: Option<web::View>,
     config_note: Option<String>,
 ) -> anyhow::Result<()> {
     let WebArgs {
         common,
         listen,
         no_open,
-        theme: chosen,
+        view: chosen,
+        sign_in,
     } = args;
     web::serve(
-        theme.unwrap_or(chosen),
+        view.unwrap_or(chosen),
         listen,
         common.login(),
         common.claim(),
@@ -393,6 +447,7 @@ async fn serve_web(
         !no_open,
         common.demo,
         config_note,
+        sign_in.settings(),
     )
     .await
 }

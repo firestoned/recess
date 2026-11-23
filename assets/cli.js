@@ -69,9 +69,12 @@ function brokerError(note) {
 // What to do about a refusal the broker names.
 const REFUSAL_HINTS = {
   unreachable_registry: 'The pool pulls only from the registries the broker lists for it (registries[].reach, ADR-0029). Use an image from one of them; set your default with RECESS_WORKLOAD in the config file.',
+  registry_not_granted: 'With gateways, the image is pulled through the claim\'s own egress, so its registry must be one of the claim\'s audiences (ADR-0063): an audience with role: registry that serves the image\'s host. Add that audience on sheet 02 (Audiences, or RECESS_AUDIENCES) and name the image on its host (RECESS_WORKLOAD), for example a pull-through mirror, pinned by digest. A registry on the sandbox segment is no longer reached.',
   namespace_required: 'This broker serves several namespaces: name one (MEDIATORE_NAMESPACE).',
   forbidden: 'The broker does not allow this claim for your identity: check who may claim in the namespace (ADR-0046) and the policy it names.',
   not_implemented: 'The broker has this feature off (for --logs: logs.enabled in its config).',
+  delegation_required: 'This audience is served from your own credential, so it must travel with the claim. On sheet 02, add it to Delegate as audience=source: env:VAR (a token in a variable set where recess web runs, e.g. github-git=env:GITHUB_TOKEN with GITHUB_TOKEN=$(gh auth token)), file:PATH (a token file), or store (the Keychain item the mediatore CLI saved); claude-code for anthropic. Or drop the audience from Audiences.',
+  delegation_refused: 'The broker did not accept the delegated credential as it is. An audience that signs in with a user name and a password (git over HTTPS, as github-git) takes them as user:secret: for GitHub, a file holding your-github-user:your-token, delegated as github-git=file:PATH (chmod 600).',
   delegation_expires_first: 'The credential you delegate (your Claude login, read from the Keychain) runs out before the claim would. Run Claude Code once so it refreshes its login, then start a new run; or ask for a shorter claim (RECESS_TTL, --ttl) that ends before the credential does.',
 };
 
@@ -100,15 +103,52 @@ function fillForm(form, s) {
   }
 }
 
-// The Theme dropdown both pages carry: the server picks the page by ?theme= and remembers it,
+// The View menu every page carries: the server picks the page by ?view= and remembers it,
 // and the run lives on the server, so switching reloads the page onto the same run.
 document.addEventListener('DOMContentLoaded', () => {
-  const pick = document.getElementById('theme');
+  const pick = document.getElementById('view');
   if (!pick) return;
   pick.addEventListener('change', () => {
-    location.assign('/?theme=' + encodeURIComponent(pick.value));
+    location.assign('/?view=' + encodeURIComponent(pick.value));
   });
+  showSignedInUser(pick);
 });
+
+// A shared Recess (behind Dex): who is signed in, as the Kubernetes API server sees them, and
+// a way out. A session that has ended sends the page to sign in again. On your own machine,
+// /api/config names no user and nothing is shown.
+async function showSignedInUser(near) {
+  let r;
+  try { r = await fetch('/api/config'); } catch { return; }
+  if (r.status === 401) {
+    location.assign('/auth/login?next=' + encodeURIComponent(location.pathname + location.search));
+    return;
+  }
+  if (!r.ok) return;
+  const cfg = await r.json();
+  const u = cfg.user;
+  if (!u) return;
+  const box = document.createElement('span');
+  box.className = 'signed-in';
+  box.style.marginLeft = '0.75em';
+  box.style.whiteSpace = 'nowrap';
+  const who = document.createElement('span');
+  who.textContent = u.name;
+  const groups = (u.kubeGroups && u.kubeGroups.length ? u.kubeGroups : u.groups) || [];
+  who.title = 'Kubernetes sees you as ' + (u.kubeUser || u.name) +
+    (groups.length ? '\ngroups: ' + groups.join(', ') : '') +
+    '\nEvery read here is made with your own token, under your RBAC.';
+  const out = document.createElement('button');
+  out.type = 'button';
+  out.textContent = 'Sign out';
+  out.style.marginLeft = '0.5em';
+  out.addEventListener('click', async () => {
+    await fetch('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    location.assign('/');
+  });
+  box.append(who, out);
+  near.insertAdjacentElement('afterend', box);
+}
 
 // A copy-to-clipboard button, for the output box of either page: the two-sheet icon, a check for a moment once copied. `text`
 // is called at click time, so a live stream copies what has arrived by then.
@@ -158,4 +198,47 @@ function copyButton(text) {
     }, 1400);
   });
   return b;
+}
+
+// YAML for reading, as kubectl prints objects: block mappings and sequences, two spaces a
+// level, strings quoted only when plain YAML would read them as something else, multi-line
+// strings as literal blocks. Values are JSON (what the API and the broker return).
+function toYaml(v) {
+  const plain = /^[A-Za-z0-9_./][A-Za-z0-9_./ :@+-]*$/;
+  const special = /^(true|false|yes|no|on|off|y|n|null|~|[-+]?(\.?\d[\d_]*\.?\d*([eE][-+]?\d+)?|0x[0-9a-fA-F]+|\.inf|\.nan))$/i;
+  const str = (s) => (s !== '' && plain.test(s) && !special.test(s) && !/:\s|\s#|\s$|: *$/.test(s) ? s : JSON.stringify(s));
+  const key = (k) => (plain.test(k) && !special.test(k) && !k.includes(': ') ? k : JSON.stringify(k));
+  const scalar = (x, ind) => {
+    if (x === null || x === undefined) return 'null';
+    if (typeof x === 'string') {
+      if (x.includes('\n')) {
+        const chomp = x.endsWith('\n') ? '' : '-';
+        const body = x.replace(/\n$/, '').split('\n').map((l) => (l ? ind + '  ' + l : '')).join('\n');
+        return `|${chomp}\n${body}`;
+      }
+      return str(x);
+    }
+    return String(x);
+  };
+  const isBlock = (x) => x && typeof x === 'object' && (Array.isArray(x) ? x.length : Object.keys(x).length);
+  const empty = (x) => (Array.isArray(x) ? '[]' : '{}');
+  const emit = (x, ind) => {
+    const out = [];
+    if (Array.isArray(x)) {
+      for (const item of x) {
+        if (isBlock(item)) {
+          // The first line of a nested block shares the dash.
+          const inner = emit(item, ind + '  ');
+          out.push(ind + '- ' + inner.slice(ind.length + 2));
+        } else out.push(ind + '- ' + (item && typeof item === 'object' ? empty(item) : scalar(item, ind)));
+      }
+    } else {
+      for (const [k, val] of Object.entries(x)) {
+        if (isBlock(val)) out.push(`${ind}${key(k)}:\n${emit(val, Array.isArray(val) ? ind : ind + '  ')}`);
+        else out.push(`${ind}${key(k)}: ${val && typeof val === 'object' ? empty(val) : scalar(val, ind)}`);
+      }
+    }
+    return out.join('\n');
+  };
+  return isBlock(v) ? emit(v, '') : v && typeof v === 'object' ? empty(v) : scalar(v, '');
 }

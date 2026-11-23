@@ -1,0 +1,45 @@
+# Copyright (c) 2026 Erick Bourgeois, Recess
+# SPDX-License-Identifier: Apache-2.0
+#
+# What a person needs for the whole Admin view. Recess holds no access of its own: these are
+# granted to people (or their groups), and each sees what their own bindings allow; a kind
+# they may not read is named on the page instead of shown.
+#
+# Bind them to your groups as the API server names them (the Dex `groups` claim with your
+# authentication config's prefix); the subjects below are placeholders.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: recess-viewer
+rules:
+  - apiGroups: ["mediatore.io"]
+    resources: ["agentsandboxes", "sandboxnodes", "policyfloors"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["sandbox.firestoned.io"]
+    resources: ["sandboxpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["banlieue.io"]
+    resources: ["virtualmachines", "virtualmachinepools", "providers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["infrastructure.banlieue.io"]
+    resources: ["libvirtmachines"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["faubourg.firestoned.io"]
+    resources: ["hosts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["spire.spiffe.io"]
+    resources: ["clusterstaticentries"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: recess-viewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: recess-viewer
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: "github:example-org:platform"

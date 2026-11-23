@@ -28,7 +28,7 @@ fn now_plus(secs: i64) -> String {
     (jiff::Timestamp::now() + jiff::SignedDuration::from_secs(secs)).to_string()
 }
 
-async fn pause(ms: u64) {
+pub(crate) async fn pause(ms: u64) {
     tokio::time::sleep(Duration::from_millis(paced(ms, pace()))).await;
 }
 
@@ -116,9 +116,26 @@ impl World {
         } else {
             json!({"gateway": "gateway-02", "how": "demo"})
         };
+        // The claim's SPIRE entries (ADR-0006): declared once the record has its entry, deleted
+        // at the release.
+        let entry_set = obj.is_some_and(|o| o.pointer("/status/entrySet") == Some(&json!(true)));
+        let spire = if entry_set && !ended {
+            let agent = "spiffe://sandbox.home.example/spire/agent/tpm/9c41e0d2";
+            json!({"entries": [
+                {"name": format!("mediatore-claim-{CLAIM_UID}"), "created": now(),
+                 "spiffeId": format!("spiffe://sandbox.home.example/banlieue/claim/{CLAIM_UID}"),
+                 "parentId": agent, "selectors": ["unix:user:sandbox"], "ttl": "1h0m0s",
+                 "className": "mediatore", "hint": "", "rendered": true, "masked": false, "set": true},
+                {"name": "mediatore-node-9c41e0d2", "created": now(),
+                 "spiffeId": "spiffe://sandbox.home.example/banlieue/node/9c41",
+                 "parentId": agent, "selectors": ["unix:uid:0", "unix:path:/usr/bin/mediatore"], "ttl": "",
+                 "className": "mediatore", "hint": "", "rendered": true, "masked": false, "set": true}]})
+        } else {
+            json!({"entries": []})
+        };
         r.data(
             Step::Seal,
-            json!({"secrets": map, "kubeSecrets": kube, "brokerNamespace": "banlieue-system",
+            json!({"spire": spire, "secrets": map, "kubeSecrets": kube, "brokerNamespace": "banlieue-system",
                 "memberVm": member, "gateways": self.gateways, "via": via,
                 "gatewayQuery": {"selector": "mediatore.io/role=gateway", "namespace": "", "prefix": "gateway-"}}),
         );
@@ -261,7 +278,8 @@ pub async fn run(r: Arc<Run>, login: LoginSettings) {
             "creationTimestamp": created, "generation": 1, "finalizers": ["mediatore.io/release"],
             "labels": {"mediatore.io/claim-uid": CLAIM_UID}},
         "spec": {"subject": {"issuer": "https://dex.example.com", "id": "CgZvY3RvY2F0EgZnaXRodWI", "display": "octocat"},
-            "ttlSeconds": 3600, "workload": {"image": image, "args": args, "restart": "Never", "logs": true}},
+            "ttlSeconds": 3600, "policyRef": {"name": "default"},
+            "workload": {"image": image, "args": args, "restart": "Never", "logs": true}},
         "status": {"phase": "Pending"}
     });
     let mut prev = BTreeMap::new();
@@ -288,7 +306,10 @@ pub async fn run(r: Arc<Run>, login: LoginSettings) {
     obj["status"]["claimRef"] = json!({"name": "octocat-7k2qd"});
     obj["status"]["claimUid"] = json!(CLAIM_UID);
     obj["status"]["record"] = json!({"claimUid": CLAIM_UID, "sandboxUid": SANDBOX_UID, "createdAt": created,
-        "refresh": true, "delegations": [{"audience": "anthropic"}]});
+        "refresh": true, "delegations": [{"audience": "anthropic"}],
+        "policyUid": "5d0c1b2a-0000-4000-8000-00000000b001", "bundleVersion": 7});
+    obj["status"]["conditions"] = json!([{"type": "PolicyConformant", "status": "True", "reason": "Conformant",
+        "message": "the sandbox is within policy default, bundle 7", "lastTransitionTime": now()}]);
     push(&r, &obj, &mut prev);
     r.data(Step::Run, json!({"event": {"at": now(), "type": "Normal", "reason": "Claimed",
         "message": "VirtualMachineClaim created; waiting for a Ready member", "object": "AgentSandbox/octocat-7k2qd", "count": 1}}));
@@ -326,7 +347,8 @@ pub async fn run(r: Arc<Run>, login: LoginSettings) {
     obj["status"]["record"]["entryId"] = json!("e7d1c0b9-0000-4000-8000-0000000e0001");
     push(&r, &obj, &mut prev);
     pause(900).await;
-    obj["status"]["record"]["nodeId"] = json!("spiffe://sandbox.home.example/banlieue/node/9c41");
+    obj["status"]["record"]["nodeId"] =
+        json!("spiffe://sandbox.home.example/spire/agent/tpm/9c41e0d2");
     push(&r, &obj, &mut prev);
     world.custody(&r, Some(&obj), &sealed, false, false, vm);
     pause(2600).await;

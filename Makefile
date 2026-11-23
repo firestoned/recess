@@ -10,7 +10,7 @@ OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 ARCH := $(shell uname -m | sed -e 's/aarch64/arm64/' -e 's/amd64/x86_64/')
 DIST := dist/recess-$(OS)-$(ARCH)
 
-.PHONY: help fmt fmt-check lint test deny audit check build dist demo record
+.PHONY: help fmt fmt-check lint test deny audit check build dist demo record image
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -51,5 +51,10 @@ dist: build ## The release binary into dist/recess-<os>-<arch>, with its SHA-256
 demo: ## The scripted run in a browser, no cluster
 	cargo run --release -- web --demo
 
-record: ## Record the web-3d demo into docs/media (GIF and MP4): needs node, ffmpeg, Chrome
-	scripts/record-web-3d.sh
+record: ## Record the AgentSandbox demo into docs/media (GIF and MP4): needs node, ffmpeg, Chrome
+	scripts/record-agentsandbox.sh
+
+IMAGE ?= recess:dev
+
+image: ## The distroless container image (podman, or CONTAINER=docker), tagged $(IMAGE)
+	$(or $(CONTAINER),podman) build -t $(IMAGE) .

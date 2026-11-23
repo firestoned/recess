@@ -32,6 +32,8 @@ pub struct TlsProbe {
     pub at: String,
     /// A placeholder, from `--demo`: nothing was dialled.
     pub demo: bool,
+    /// The proxy the handshake went through (`host:port`), or empty for a direct connection.
+    pub via: String,
 }
 
 /// One certificate of a presented chain.
@@ -73,12 +75,9 @@ pub async fn probe(url: &str, ca_file: &str) -> anyhow::Result<TlsProbe> {
     };
     cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
-    let tcp = tokio::time::timeout(
-        TIMEOUT,
-        tokio::net::TcpStream::connect((host.as_str(), port)),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("{host}:{port}: no TCP connection within 5 s"))??;
+    // Through HTTPS_PROXY, as the CLI's own requests go, unless NO_PROXY exempts the host.
+    let proxy = crate::proxy::for_host(&host)?;
+    let tcp = crate::proxy::connect(proxy.as_ref(), &host, port, TIMEOUT).await?;
     let name = rustls::pki_types::ServerName::try_from(host.clone())?;
     let tls = tokio::time::timeout(TIMEOUT, connector.connect(name, tcp))
         .await
@@ -113,6 +112,7 @@ pub async fn probe(url: &str, ca_file: &str) -> anyhow::Result<TlsProbe> {
         },
         chain,
         at: jiff::Timestamp::now().to_string(),
+        via: proxy.map(|p| p.display()).unwrap_or_default(),
         demo: false,
     })
 }
@@ -227,6 +227,7 @@ pub fn demo(url: &str) -> TlsProbe {
         verified_with: "the Mozilla roots (webpki-roots)".into(),
         at: jiff::Timestamp::now().to_string(),
         demo: true,
+        via: String::new(),
     }
 }
 

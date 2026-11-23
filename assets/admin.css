@@ -1,0 +1,81 @@
+/* Copyright (c) 2026 Erick Bourgeois, Recess */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/* The admin page: agentsandbox.css's blueprint, the bar's counts and filter, and the agents' labels. */
+:root { --carrier: #f472b6; --policy: #fb923c; }
+
+.counts { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.counts button {
+  font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap;
+  padding: 4px 8px; border: 1px solid var(--faint); color: var(--muted); background: transparent; border-radius: 2px;
+}
+.counts button b { color: var(--ink); margin-right: 5px; font-weight: 700; }
+.counts button.running { border-color: rgba(94, 231, 255, .5); color: var(--wire); }
+.counts button.pending { color: var(--muted); }
+.counts button.gaps { border-color: rgba(251, 191, 36, .5); color: var(--seal); }
+.counts button.refused { border-color: rgba(248, 113, 113, .6); color: var(--bad); }
+.counts button.exited { border-color: rgba(74, 222, 128, .4); color: var(--ok); }
+.counts button.on { box-shadow: 0 0 10px rgba(219, 231, 245, .25) inset; }
+.counts button.on b, .counts button:hover b { color: currentColor; }
+
+.filter {
+  font: 12px var(--mono); color: var(--ink); background: rgba(6, 12, 22, .7);
+  border: 1px solid var(--faint); border-radius: 2px; padding: 5px 8px; width: 260px; max-width: 32vw;
+}
+.filter:focus { border-color: var(--wire); outline: none; }
+#live.ok { color: var(--ok); }
+#live.bad { color: var(--bad); }
+
+.lbl.agent b { font-size: 9.5px; }
+.lbl.agent.running b { color: var(--wire); }
+.lbl.agent.pending b { color: var(--muted); }
+.lbl.agent.gaps b { color: var(--seal); }
+.lbl.agent.refused b { color: var(--bad); }
+.lbl.agent.exited b { color: var(--ok); }
+.lbl.gateway b { color: var(--carrier); font-size: 11.5px; }
+.lbl.policy b { color: var(--policy); }
+/* A label centred under its icon (policies, providers). */
+.lbl.under { text-align: center; }
+.lbl.ns b { color: var(--ink); font-size: 11px; letter-spacing: .18em; }
+.lbl.broker b { color: var(--ident); }
+
+.caption .cap-fix { color: var(--seal); font: 11px var(--mono); margin-top: 4px; white-space: normal; }
+
+/* The egress table in an agent's or a gateway's details. */
+.routes { width: 100%; border-collapse: collapse; font: 11px var(--mono); }
+.routes th { text-align: left; color: var(--muted); font-weight: 600; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; padding: 3px 6px 3px 0; border-bottom: 1px solid var(--faint); }
+.routes td { padding: 4px 6px 4px 0; border-bottom: 1px solid rgba(52, 66, 90, .5); vertical-align: top; word-break: break-all; }
+.routes td.n { text-align: right; color: var(--ink); white-space: nowrap; }
+.routes .allow { color: var(--ok); }
+.routes .deny { color: var(--bad); }
+.routes .gw { color: var(--carrier); }
+.details .pick { background: none; border: 0; padding: 0; color: var(--wire); font: inherit; letter-spacing: 0; text-transform: none; cursor: pointer; text-align: left; }
+.details .pick:hover { text-decoration: underline; }
+.details .src { font: 600 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 1px 5px; border: 1px solid currentColor; border-radius: 2px; margin-left: 6px; }
+.details .src.status { color: var(--ok); }
+.details .src.log { color: var(--wire); }
+.details .src.none { color: var(--faint); }
+.details .note { color: var(--muted); margin: 6px 0 0; }
+.details .st-running { color: var(--wire); } .details .st-pending { color: var(--muted); }
+.details .st-gaps { color: var(--seal); } .details .st-refused { color: var(--bad); } .details .st-exited { color: var(--ok); }
+
+/* The pools and their members; SPIRE, lit once it holds identities. */
+:root { --spire: #2dd4bf; }
+.lbl.pool b { color: var(--ok); font-size: 13px; letter-spacing: .18em; }
+.lbl.pool i { font-size: 11.5px; }
+.lbl.vm b { font-size: 9px; }
+.lbl.vm.claimed b { color: var(--wire); }
+.lbl.vm.warm b { color: var(--ok); }
+.lbl.vm.booting b, .lbl.vm.off b { color: var(--muted); }
+.lbl.spire b { color: var(--muted); }
+.lbl.spire.lit b { color: var(--spire); }
+
+/* The providers (hosts), and the cross-reference audit in the details. */
+.lbl.provider b { color: var(--ident); font-size: 11.5px; letter-spacing: .14em; }
+.routes.xref td.via { color: var(--muted); font-size: 10px; word-break: normal; }
+.routes.xref tr.broken td { color: var(--bad); }
+.routes.xref td:first-child { width: 1.2em; }
+.routes.xref td:nth-child(2) { white-space: nowrap; color: var(--muted); }
+
+/* The Output tab: notes from Recess and the broker, beside the workload's own lines. */
+.lines .note { color: var(--muted); font-style: italic; }

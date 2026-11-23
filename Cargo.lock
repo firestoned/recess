@@ -1622,6 +1622,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-timeout",
  "hyper-util",
+ "ipnet",
  "jiff",
  "jsonpath-rust",
  "k8s-openapi",
@@ -2471,6 +2472,7 @@ dependencies = [
  "mediatore-client",
  "mediatore-proto",
  "ratatui",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",
@@ -2478,6 +2480,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
+ "tower",
  "x509-parser",
 ]
 

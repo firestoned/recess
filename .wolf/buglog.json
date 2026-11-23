@@ -221,6 +221,46 @@
       "files": [
         "src/engine.rs"
       ]
+    },
+    {
+      "id": "bug-016",
+      "date": "2026-11-22",
+      "file": "assets/3d.js",
+      "error_message": "Wired 3D animation jittery and slow, high CPU, during live runs with lots of output",
+      "root_cause": "outputLine read the output pre's scroll geometry, appended one span, then set scrollTop, per line: two forced layouts of a growing pre per line. Bursts of pip/mkdocs output stalled frames up to 500 ms; the 50 ms dt clamp made the scene also run slow.",
+      "fix": "Queue lines and flush once per frame (flushTerm in frame()) as one fragment with one scroll read and write; keep the latest 2000 spans (copy reads model.lines). Burst test: 18 fps / p95 350 ms -> 59 fps / p95 16.7 ms.",
+      "tags": [
+        "web-3d",
+        "performance",
+        "layout-thrash",
+        "output"
+      ]
+    },
+    {
+      "id": "bug-017",
+      "error_message": "recess web: Ctrl-C does not stop the server while a Watch page is open",
+      "root_cause": "axum's graceful shutdown waits for every connection to finish; the /api/watch server-sent event stream never ends, so the shutdown waited forever, and tokio's ctrl_c handler had replaced the default SIGINT so a second Ctrl-C did nothing",
+      "fix": "an App.stopping watch channel set on Ctrl-C; both SSE streams take_until it; a fallback exits with 130 on a second Ctrl-C or after 5 s (src/web.rs)",
+      "tags": [
+        "web",
+        "shutdown",
+        "sse",
+        "watch"
+      ],
+      "date": "2026-11-23"
+    },
+    {
+      "id": "bug-018",
+      "error_message": "AgentSandbox shows sheet 01 stamped \"signed \u00b7 you\" before anyone signs in",
+      "root_cause": "cli.js gained a global async function signedIn(near) for the Dex badge; agentsandbox.js already declares a global function signedIn() (the stamp animation). Classic scripts share one global scope, so the later declaration won and cli.js called the stamp animation on every page load.",
+      "fix": "Renamed the cli.js function to showSignedInUser; web.rs test no_two_scripts_on_a_page_declare_the_same_name checks every page's scripts for shared top-level names.",
+      "tags": [
+        "web",
+        "agentsandbox",
+        "cli.js",
+        "global-scope"
+      ],
+      "date": "2026-11-23"
     }
   ]
 }

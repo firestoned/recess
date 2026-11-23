@@ -5,10 +5,10 @@
 
 *When agents go to play.* (Formerly Low Tide.)
 
-![recess web, Wired 3D theme: a request sealed into an envelope, carried through the broker, the Kubernetes API and the sandbox VM, then drilled into](docs/media/web-3d.gif)
+![recess web, AgentSandbox view: a request sealed into an envelope, carried through the broker, the Kubernetes API and the sandbox VM, then drilled into](docs/media/agentsandbox.gif)
 
-*`recess web --theme wired-3d --demo`, at 2.2× speed. The whole tour at real speed:
-[docs/media/web-3d.mp4](docs/media/web-3d.mp4).*
+*`recess web --view agentsandbox --demo`, at 2.2× speed. The whole tour at real speed:
+[docs/media/agentsandbox.mp4](docs/media/agentsandbox.mp4).*
 
 Walk one workload through mediatore and watch each stage happen, in a browser or a terminal.
 The stages follow the `mediatore` CLI's process:
@@ -47,15 +47,19 @@ cargo build --release
 MEDIATORE_ISSUER=https://dex.example.com MEDIATORE_URL=https://mediatore.example.com \
   ./target/release/recess web --namespace sandboxes
 
-# The same, opening on the wireframe 3D journey; the page's Theme dropdown switches either way.
-./target/release/recess web --theme wired-3d --namespace sandboxes
+# The same, opening on the wireframe 3D journey; the page's View menu switches either way.
+./target/release/recess web --view agentsandbox --namespace sandboxes
+
+# Every live agent in the cluster, read-only (also at /watch on any recess web).
+./target/release/recess web --view watch
 
 # Terminal: the same two forms (login, then sandbox create) with every option and buttons.
 ./target/release/recess tui --namespace sandboxes
 
 # No cluster: a scripted run with placeholder values, for showing the flow.
 ./target/release/recess web --demo
-./target/release/recess web --theme wired-3d --demo
+./target/release/recess web --view agentsandbox --demo
+./target/release/recess web --view watch --demo
 ./target/release/recess tui --demo
 ```
 
@@ -81,10 +85,16 @@ in the session file, newest first, with how each ended (exit code, failure, stil
 
 ## The 3D page
 
-The Theme dropdown at the top of either page picks how the run is shown: **Classic** (the stage
-cards) or **Wired 3D**. Both are the same run, through the same API and guards, so switching in
-the middle of a run reloads the page onto it; the choice is remembered, and `--theme`
-(`RECESS_THEME`) sets the one a browser sees first. Wired 3D shows the run as a wireframe
+The View menu at the top of every page picks what it shows: **Classic** (your run as stage
+cards), **AgentSandbox** (your run as a 3D journey; `--view agentsandbox`) or **Admin**
+(every live agent in the cluster; `--view admin`, or `/admin`). The names they had before,
+`wired-3d` and `watch` (and `/watch`), are still accepted.
+They share the same API and guards, and your run lives on the server, so switching in the
+middle of a run reloads the page onto it; the choice is remembered, and `--view`
+(`RECESS_VIEW`; `--theme` and `RECESS_THEME` are its old names) sets the one a browser sees
+first. Both 3D views stand on one base theatre (`assets/theatre.js`): the renderer, the shapes,
+and the infrastructure in the same places, the issuer, the broker, the Kubernetes API and its
+Secrets vault, the SandboxPolicy, OpenBao and SPIRE. AgentSandbox shows the run as a wireframe
 journey. The request starts as a sheet of paper: sign in with the issuer first (the issuer
 stamps the sheet), then write the workload and press "Seal and send". The sheet crumples into
 an envelope with an open lock and travels to the broker (`POST /v1/claims`), on to the
@@ -139,11 +149,18 @@ gateway is a candidate, dashed, and the details say why; the demo's scripted wor
 | click | pick a node or an edge |
 | double-click | open or close the vault; elsewhere, reset the orbit |
 | drag | orbit |
-| right-drag, shift-drag, W A S D | pan |
+| right-drag, shift-drag, Cmd-drag, W A S D | pan |
 | scroll, + and - | zoom |
 | arrow keys | orbit |
 | `[` and `]` | the previous or next node |
 | Esc, "Follow live" | hand the camera back to the run |
+| Ctrl-drag | move a station: across the floor when looking down, upright when looking level (Shift swaps) |
+| Ctrl-double-click | put a moved station back |
+
+Moves are kept per view in `layout.json` beside `config.env` (`~/.config/recess/`), as offsets
+from where the code stands each thing, and read back on the next load. In the Admin view an
+agent moves its namespace's plot and a VM its pool's rack. A shared Recess (behind Dex) keeps
+the layout as shipped and saves nothing.
 
 The renderer is a small one on a 2D canvas, with no 3D library and nothing loaded from
 elsewhere; `prefers-reduced-motion` shortens every animation.
@@ -152,9 +169,33 @@ elsewhere; `prefers-reduced-motion` shortens every animation.
 
 `make record` rebuilds the GIF and MP4 above: it runs the demo with placeholder values only
 (an empty config, `example.com` URLs), drives it in headless Chrome
-(`scripts/record-web-3d.mjs`) and encodes with ffmpeg. It needs node, ffmpeg and Chrome or
+(`scripts/record-agentsandbox.mjs`) and encodes with ffmpeg. It needs node, ffmpeg and Chrome or
 Chromium (`CHROME` names the binary). `RECESS_DEMO_PACE` slows the demo (3 for the
 recording; 1, the default, is the scripted speed).
+
+## The Admin view
+
+Admin (`--view admin`, `/admin`) shows every live agent your kubeconfig may see, in the same theatre as your run. East of
+the Kubernetes API, each namespace is a plot and each AgentSandbox a cage on it: cyan running,
+dashed grey pending, amber with policy gaps, red refused, green exited. The egress gateways
+float north of them, and a running agent has one line to the gateway carrying its traffic, a
+packet on it at each new decision. South of the fleet, each VirtualMachinePool is a rack with a
+box per member VM: claimed (an agent runs in it), warm, or still booting. SPIRE lights up with
+the claims' registration entries, OpenBao with the sealed Secrets. Click anything for its
+details: an agent shows its owner, policy, VM and pool, egress table, SPIRE entries and sealed
+envelopes; a pool, its members and the agent on each.
+
+It is read-only, and one set of watches serves every viewer. The kubeconfig needs list and
+watch, across all namespaces, on `agentsandboxes.mediatore.io`, `virtualmachines.banlieue.io`,
+`virtualmachinepools.banlieue.io`, `sandboxpolicies.sandbox.firestoned.io` and
+`clusterstaticentries.spire.spiffe.io`; for the sealed envelopes, list and watch on Secrets in
+`--broker-namespace` (read as metadata only, never their data); and for egress before mediatore
+writes `status.egress` (ADR-0063), the broker pods' logs. Whatever it may not read is named in
+the caption, and the rest still shows.
+
+Each agent, VM, gateway and provider's details end with **Cross-references**: every link to
+another object, the status field it was read from, and whether that object still exists; see
+[docs/cross-references.md](docs/cross-references.md) for the links and the ones still missing.
 
 ## The TUI
 
@@ -238,7 +279,7 @@ empty, `0`, `false`, `no` or `off`), so a config file or a shell can carry all o
 | `--gateway-prefix` | `RECESS_GATEWAY_PREFIX` | `gateway-` |
 | `--no-gateways` | `RECESS_NO_GATEWAYS` | false |
 | `--listen` (web) | `RECESS_LISTEN` | `127.0.0.1:7480` |
-| `--theme` (web) | `RECESS_THEME` | `classic` (or `wired-3d`) |
+| `--view` (web) | `RECESS_VIEW` | `classic` (or `agentsandbox`, `admin`) |
 | `--no-open` (web) | `RECESS_NO_OPEN` | false |
 | `--demo` | `RECESS_DEMO` | false |
 | (demo only) | `RECESS_DEMO_PACE` | 1 (slower above, 0.1 to 10) |
@@ -262,6 +303,7 @@ Each claim spends the session's refresh token, so each run logs in again unless
 make check   # fmt, clippy (pedantic, -D warnings), tests, cargo-deny
 make dist    # release binary into dist/recess-<os>-<arch>, with its SHA-256
 make demo    # the scripted run in a browser
+make image   # the distroless container image (podman), recess:dev
 ```
 
 CI (`.github/workflows/build.yaml`) runs the same targets: SPDX headers, signed commits, fmt,
@@ -279,7 +321,25 @@ arm64, attached to a published release.
 
 The web server listens on loopback only, checks the `Host` header, and requires the key from
 the printed link (traded for a `SameSite=Strict` `HttpOnly` cookie) on every route; POSTs
-take JSON only.
+take JSON only. Shared behind Dex ([In a cluster](#in-a-cluster)), it requires a sign-in
+instead, keeps each person's tokens on the server, and reads the cluster with their token,
+never with its own.
+
+## In a cluster
+
+`recess web` can also be shared, as a page your team opens to watch the fleet. Give it an
+issuer and the address browsers use:
+
+```sh
+recess web --view admin --listen 0.0.0.0:7480 \
+  --oidc-issuer https://dex.bar.foo.io --public-url https://recess.bar.foo.io
+```
+
+Everyone then signs in with Dex before any page loads. Every Kubernetes read is made with that
+person's own ID token, so the API server applies their RBAC; without an issuer, the server is
+yours alone (loopback, the key link, your kubeconfig). A shared Recess starts no runs.
+[`deploy/`](deploy/README.md) has the manifests, built from the distroless `Dockerfile`, and
+what Dex and the API server need.
 
 ## Kubernetes access
 
@@ -293,3 +353,12 @@ and the rest of the run goes on.
 The steps inside the VM between "sandbox built" and the first output have no events of their
 own today. Telemetry from the guest (spans keyed by the claim UID) would turn the `inferred`
 steps into `observed` ones; the engine's step/event model is where it would plug in.
+
+## Contributing and licence
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) (every commit signed off and
+signed), the [Code of Conduct](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md) for
+reporting a vulnerability privately. How the project is run is in
+[GOVERNANCE.md](GOVERNANCE.md), and who maintains it in [MAINTAINERS.md](MAINTAINERS.md).
+
+Recess is licensed under the [Apache License, Version 2.0](LICENSE); see [NOTICE](NOTICE).

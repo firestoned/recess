@@ -377,6 +377,61 @@ pub async fn recent_sandboxes(
     Ok(items.iter().take(limit).map(recent_summary).collect())
 }
 
+fn entry_resource() -> ApiResource {
+    ApiResource::from_gvk_with_plural(
+        &GroupVersionKind::gvk("spire.spiffe.io", "v1alpha1", "ClusterStaticEntry"),
+        "clusterstaticentries",
+    )
+}
+
+/// A SPIRE `ClusterStaticEntry` as the UI shows it: who the entry names, under which agent,
+/// with which selectors, and whether the controller manager has put it on the SPIRE server.
+#[must_use]
+pub fn entry_summary(obj: &Value) -> Value {
+    json!({
+        "name": str_at(obj, "/metadata/name"),
+        "created": str_at(obj, "/metadata/creationTimestamp"),
+        "spiffeId": str_at(obj, "/spec/spiffeID"),
+        "parentId": str_at(obj, "/spec/parentID"),
+        "selectors": obj.pointer("/spec/selectors").cloned().unwrap_or_else(|| json!([])),
+        "ttl": str_at(obj, "/spec/x509SVIDTTL"),
+        "className": str_at(obj, "/spec/className"),
+        "hint": str_at(obj, "/spec/hint"),
+        "rendered": obj.pointer("/status/rendered").and_then(Value::as_bool),
+        "masked": obj.pointer("/status/masked").and_then(Value::as_bool),
+        "set": obj.pointer("/status/set").and_then(Value::as_bool),
+    })
+}
+
+/// The claim's SPIRE registration entries, as the broker declares them (mediatore ADR-0006):
+/// `mediatore-claim-<claim uid>`, and the node entry under the same agent
+/// (`mediatore-node-...`). Empty until the broker writes them; an error when this kubeconfig
+/// may not read `clusterstaticentries` (cluster-scoped, `spire.spiffe.io`).
+pub async fn spire_entries(client: kube::Client, claim_uid: &str) -> anyhow::Result<Vec<Value>> {
+    if claim_uid.is_empty() {
+        return Ok(Vec::new());
+    }
+    let api: kube::Api<DynamicObject> = kube::Api::all_with(client, &entry_resource());
+    let Some(claim) = api.get_opt(&format!("mediatore-claim-{claim_uid}")).await? else {
+        return Ok(Vec::new());
+    };
+    let claim = serde_json::to_value(&claim)?;
+    let parent = str_at(&claim, "/spec/parentID").to_owned();
+    let mut out = vec![entry_summary(&claim)];
+    if !parent.is_empty() {
+        let all = api.list(&ListParams::default()).await?;
+        for o in all {
+            let v = serde_json::to_value(&o)?;
+            if str_at(&v, "/metadata/name").starts_with("mediatore-node-")
+                && str_at(&v, "/spec/parentID") == parent
+            {
+                out.push(entry_summary(&v));
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
