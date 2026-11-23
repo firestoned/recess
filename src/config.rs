@@ -116,10 +116,7 @@ pub fn parse(text: &str) -> Parsed {
 /// The default file's path.
 #[must_use]
 pub fn default_path() -> Option<PathBuf> {
-    let base = match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(d) if !d.is_empty() => PathBuf::from(d),
-        _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
-    };
+    let base = config_home()?;
     let current = base.join("recess").join("config.env");
     // Before the rename the file lived under low-tide: still read when there is no new one.
     let legacy = base.join("low-tide").join("config.env");
@@ -127,6 +124,20 @@ pub fn default_path() -> Option<PathBuf> {
         legacy
     } else {
         current
+    })
+}
+
+/// Where the 3D views' layout is kept (what Ctrl-drag moved): beside the default file.
+#[must_use]
+pub fn layout_path() -> Option<PathBuf> {
+    Some(config_home()?.join("recess").join("layout.json"))
+}
+
+/// `$XDG_CONFIG_HOME`, else `~/.config`.
+fn config_home() -> Option<PathBuf> {
+    Some(match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(d) if !d.is_empty() => PathBuf::from(d),
+        _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
     })
 }
 

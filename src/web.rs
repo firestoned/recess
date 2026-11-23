@@ -258,6 +258,7 @@ pub async fn serve(
         .route("/api/events", get(events))
         .route("/api/recent", get(recent))
         .route("/api/tls", get(tls))
+        .route("/api/layout", get(layout).put(save_layout))
         .route("/api/admin", get(admin_events))
         .route("/api/admin/output", get(admin_output))
         .route("/auth/logout", post(sign_out))
@@ -988,6 +989,102 @@ struct TlsQuery {
 
 /// Recess's own TLS handshake with the broker or the issuer (`target=broker|issuer`): what
 /// was negotiated and presented. Only those two hosts, the ones this server talks to anyway.
+/// The 3D views whose layout can be saved, and how many nodes each may move.
+const LAYOUT_VIEWS: [&str; 2] = ["agentsandbox", "admin"];
+const LAYOUT_MAX: usize = 512;
+
+/// What Ctrl-drag moved, by view, then by node: an offset from where the code stands it.
+type Layout = std::collections::BTreeMap<String, std::collections::BTreeMap<String, [f64; 3]>>;
+
+/// One view's layout, as the page sends it after a move.
+#[derive(Deserialize)]
+struct LayoutPut {
+    view: String,
+    moved: std::collections::BTreeMap<String, [f64; 3]>,
+}
+
+/// One save at a time: each reads the file, changes its view and writes it back.
+static LAYOUT_LOCK: Mutex<()> = Mutex::new(());
+
+fn read_layout(path: &std::path::Path) -> Layout {
+    std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// The saved layout, and whether this server saves one: on your machine, not when shared
+/// (everyone sees the layout as shipped).
+async fn layout(State(app): State<Shared>) -> Response {
+    let path = crate::config::layout_path().filter(|_| app.shared.is_none());
+    let views = path.as_deref().map(read_layout).unwrap_or_default();
+    Json(json!({"editable": path.is_some(), "views": views})).into_response()
+}
+
+fn check_layout(put: &LayoutPut) -> Result<(), String> {
+    if !LAYOUT_VIEWS.contains(&put.view.as_str()) {
+        return Err(format!("no layout is kept for the view {:?}", put.view));
+    }
+    if put.moved.len() > LAYOUT_MAX {
+        return Err(format!("more than {LAYOUT_MAX} nodes moved"));
+    }
+    for (k, v) in &put.moved {
+        if k.is_empty() || k.len() > 256 {
+            return Err("a node's key is empty or longer than 256".into());
+        }
+        if v.iter().any(|x| !x.is_finite() || x.abs() > 1000.0) {
+            return Err(format!("{k}: an offset out of range"));
+        }
+    }
+    Ok(())
+}
+
+fn write_layout(path: &std::path::Path, put: LayoutPut) -> anyhow::Result<()> {
+    let _one = lock(&LAYOUT_LOCK);
+    let mut all = read_layout(path);
+    if put.moved.is_empty() {
+        all.remove(&put.view);
+    } else {
+        all.insert(put.view, put.moved);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&all)?)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+async fn save_layout(State(app): State<Shared>, Json(put): Json<LayoutPut>) -> Response {
+    if app.shared.is_some() {
+        return err(
+            StatusCode::FORBIDDEN,
+            "this Recess is shared: its layout is the one shipped, and moves are not saved",
+        );
+    }
+    if let Err(e) = check_layout(&put) {
+        return err(StatusCode::BAD_REQUEST, e);
+    }
+    let Some(path) = crate::config::layout_path() else {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "no home directory to keep the layout in",
+        );
+    };
+    match tokio::task::spawn_blocking(move || write_layout(&path, put)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("the layout was not saved: {e:#}"),
+        ),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("the layout was not saved: {e}"),
+        ),
+    }
+}
+
 async fn tls(State(app): State<Shared>, Query(q): Query<TlsQuery>) -> Response {
     let (key, url, ca) = match q.target.as_str() {
         "broker" => ("broker", app.claim.url.clone(), app.claim.ca_file.clone()),
@@ -1066,6 +1163,31 @@ async fn events(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_layout_is_checked_then_kept_per_view() {
+        let put = |view: &str, moved: &[(&str, [f64; 3])]| LayoutPut {
+            view: view.into(),
+            moved: moved.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect(),
+        };
+        assert!(check_layout(&put("agentsandbox", &[("spire", [1.0, 0.0, -2.5])])).is_ok());
+        assert!(check_layout(&put("classic", &[])).is_err());
+        assert!(check_layout(&put("admin", &[("", [0.0; 3])])).is_err());
+        assert!(check_layout(&put("admin", &[("gw/a", [f64::NAN, 0.0, 0.0])])).is_err());
+        assert!(check_layout(&put("admin", &[("gw/a", [1e6, 0.0, 0.0])])).is_err());
+
+        let dir = std::env::temp_dir().join(format!("recess-layout-{}", std::process::id()));
+        let path = dir.join("layout.json");
+        write_layout(&path, put("agentsandbox", &[("spire", [1.0, 0.0, 2.0])])).unwrap();
+        write_layout(&path, put("admin", &[("gw/a", [0.0, 1.0, 0.0])])).unwrap();
+        let all = read_layout(&path);
+        assert_eq!(all["agentsandbox"]["spire"], [1.0, 0.0, 2.0]);
+        assert_eq!(all["admin"]["gw/a"], [0.0, 1.0, 0.0]);
+        // Everything put back: the view is dropped from the file.
+        write_layout(&path, put("admin", &[])).unwrap();
+        assert!(!read_layout(&path).contains_key("admin"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Every `src="/..."` and `href="/..."` in a page, the paths it will ask this server for.
     fn local_refs(html: &str) -> Vec<&str> {
         ["src=\"/", "href=\"/"]
@@ -1097,6 +1219,59 @@ mod tests {
                     ["/", "/admin"].contains(&r) || ASSETS.iter().any(|(path, _, _)| *path == r),
                     "{r} is referenced by a page but not served"
                 );
+            }
+        }
+    }
+
+    /// The names a script declares at its top level: in a classic script, globals.
+    fn top_level_names(js: &str) -> std::collections::BTreeSet<&str> {
+        js.lines()
+            .filter_map(|l| {
+                [
+                    "async function ",
+                    "function ",
+                    "const ",
+                    "let ",
+                    "var ",
+                    "class ",
+                ]
+                .iter()
+                .find_map(|kw| l.strip_prefix(kw))
+            })
+            .filter_map(|rest| {
+                rest.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+                    .next()
+                    .filter(|n| !n.is_empty())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn no_two_scripts_on_a_page_declare_the_same_name() {
+        // A page's scripts share one global scope: a name declared in two of them is one
+        // function, and the later script's replaces the other's (AgentSandbox's signedIn() once
+        // ran on every load in place of cli.js's, stamping sheet 01 before anyone signed in).
+        for view in View::ALL {
+            let scripts: Vec<(&str, std::collections::BTreeSet<&str>)> = local_refs(page(view))
+                .into_iter()
+                .filter(|r| {
+                    std::path::Path::new(r)
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("js"))
+                })
+                .map(|r| {
+                    let body = ASSETS.iter().find(|(path, _, _)| *path == r).unwrap().2;
+                    (r, top_level_names(body))
+                })
+                .collect();
+            for (i, (a, an)) in scripts.iter().enumerate() {
+                for (b, bn) in &scripts[i + 1..] {
+                    let both: Vec<_> = an.intersection(bn).collect();
+                    assert!(
+                        both.is_empty(),
+                        "{view:?}: {a} and {b} both declare {both:?}"
+                    );
+                }
             }
         }
     }

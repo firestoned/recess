@@ -28,6 +28,8 @@ body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); }
 #scene { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: grab; touch-action: none; }
 #scene.dragging { cursor: grabbing; }
 #scene.pick { cursor: pointer; }
+#scene.movable { cursor: move; }
+#scene.moving { cursor: grabbing; }
 
 /* Labels anchored to 3D points; positioned by agentsandbox.js every frame. */
 #labels { position: fixed; inset: 0; pointer-events: none; }

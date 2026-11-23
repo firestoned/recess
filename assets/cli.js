@@ -69,6 +69,7 @@ function brokerError(note) {
 // What to do about a refusal the broker names.
 const REFUSAL_HINTS = {
   unreachable_registry: 'The pool pulls only from the registries the broker lists for it (registries[].reach, ADR-0029). Use an image from one of them; set your default with RECESS_WORKLOAD in the config file.',
+  registry_not_granted: 'With gateways, the image is pulled through the claim\'s own egress, so its registry must be one of the claim\'s audiences (ADR-0063): an audience with role: registry that serves the image\'s host. Add that audience on sheet 02 (Audiences, or RECESS_AUDIENCES) and name the image on its host (RECESS_WORKLOAD), for example a pull-through mirror, pinned by digest. A registry on the sandbox segment is no longer reached.',
   namespace_required: 'This broker serves several namespaces: name one (MEDIATORE_NAMESPACE).',
   forbidden: 'The broker does not allow this claim for your identity: check who may claim in the namespace (ADR-0046) and the policy it names.',
   not_implemented: 'The broker has this feature off (for --logs: logs.enabled in its config).',
@@ -110,13 +111,13 @@ document.addEventListener('DOMContentLoaded', () => {
   pick.addEventListener('change', () => {
     location.assign('/?view=' + encodeURIComponent(pick.value));
   });
-  signedIn(pick);
+  showSignedInUser(pick);
 });
 
 // A shared Recess (behind Dex): who is signed in, as the Kubernetes API server sees them, and
 // a way out. A session that has ended sends the page to sign in again. On your own machine,
 // /api/config names no user and nothing is shown.
-async function signedIn(near) {
+async function showSignedInUser(near) {
   let r;
   try { r = await fetch('/api/config'); } catch { return; }
   if (r.status === 401) {

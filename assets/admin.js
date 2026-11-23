@@ -8,7 +8,7 @@
 // it is in its life; the egress gateways float north of it, and a running agent has one line to
 // the gateway carrying its traffic, a packet on it each time the gateway decides something for
 // it. South of the fleet, the VM pools: a rack each, a box per member VM, claimed, warm or still
-// booting. The policies the agents name stand at the back of their plots. Read-only: nothing
+// booting. The policies stand in a row north-west of the gateways. Read-only: nothing
 // here changes the cluster.
 //
 // The data is one server-sent event stream (/api/admin): the whole picture, then each change.
@@ -44,6 +44,8 @@ Object.assign(SHAPES, {
 const FLOOR_Y = -0.9;
 // Where the fleet starts: east of the Kubernetes API and its vault.
 const FLEET = { x0: 36, z0: -5 };
+// The policies: a row north-west of the gateways, this far apart.
+const POLICY_SP = 13;
 const VSP = 2.8; // between members on a rack
 const RACK_PAD = 1.4; // the rack's margin round its members
 
@@ -344,6 +346,24 @@ function node(key, kind) {
 }
 // The base stations, where they stand in every view.
 const BASE = [['issuer', 'issuer', ST.issuer], ['broker', 'broker', ST.broker], ['api', 'api', ST.api], ['vault', 'vault', ST.vault], ['openbao', 'openbao', ST.bao], ['spire', 'spire', ST.spire]];
+const BASE_AT = new Map(BASE.map(([key, , p]) => [key, p]));
+// What a Ctrl-drag of a node moves (the layout, theatre.js): a base station itself; an agent,
+// its namespace's plot; a VM, its pool's rack; a gateway, a policy or a provider, itself.
+// Each is kept as an offset by that key; layout() adds it.
+function groupOf(n) {
+  if (n.kind === 'agent') return `ns/${nsOf(n.obj)}`;
+  if (n.kind === 'vm') return n.pool || null;
+  return BASE_AT.has(n.key) || ['ns', 'pool', 'gateway', 'policy', 'provider'].includes(n.kind) ? n.key : null;
+}
+const offsetOf = (key) => LAYOUT.moved[key] || [0, 0, 0];
+// Move a group by d: a base station in place (its edges are drawn from it), the rest by
+// offset; then straight there, not eased.
+function moveGroup(key, d) {
+  if (BASE_AT.has(key)) shiftPoints([BASE_AT.get(key)], d);
+  noteMove(key, d);
+  layout();
+  for (const n of nodes.values()) if (n.pos && groupOf(n) === key) n.pos = n.goal.slice();
+}
 
 // Boxes in rows: each item's width, wrapped at about the square root of the whole, rows centred
 // on `cx` from `z`; sets x0 and z0 on each and returns where the last row ends.
@@ -403,6 +423,9 @@ function layout() {
   const fleetEnd = rowsAt(plots, cx, FLEET.z0, 4, 4.5).end;
   const racksAt = (plots.length ? fleetEnd : FLEET.z0) + 3;
   const racksEnd = rowsAt(racks, cx, racksAt, 6, 5).end;
+  // Plots and racks moved by hand stay on the floor.
+  for (const p of plots) { const o = offsetOf(`ns/${p.ns}`); p.x0 += o[0]; p.z0 += o[2]; }
+  for (const r of racks) { const o = offsetOf(r.key); r.x0 += o[0]; r.z0 += o[2]; }
   // The providers (the hosts the VMs are scheduled on), a row south of the racks.
   const provs = [...S.provider.keys()].sort();
   const pspan = Math.max(fleetW, (provs.length - 1) * 9);
@@ -410,7 +433,7 @@ function layout() {
   provs.forEach((key, i) => {
     const n = node(key, 'provider');
     n.obj = S.provider.get(key);
-    n.goal = [cx + (provs.length > 1 ? -pspan / 2 + (pspan * i) / (provs.length - 1) : 0), FLOOR_Y + 0.25, provZ];
+    n.goal = add([cx + (provs.length > 1 ? -pspan / 2 + (pspan * i) / (provs.length - 1) : 0), FLOOR_Y + 0.25, provZ], offsetOf(key));
     seen.add(key);
   });
   const provEnd = provs.length ? provZ + 3 : racksEnd;
@@ -438,18 +461,6 @@ function layout() {
       seen.add(key);
     });
   }
-  // The policies, at the back of the plot whose agents name them (a namespaced resource).
-  const plotOf = new Map(plots.map((p) => [p.ns, p]));
-  const perPlot = new Map();
-  for (const [key, o] of S.policy) {
-    const p = plotOf.get(nsOf(o));
-    const i = perPlot.get(nsOf(o)) || 0;
-    perPlot.set(nsOf(o), i + 1);
-    const n = node(key, 'policy');
-    n.obj = o;
-    n.goal = p ? [p.x0 + 0.8 + i * 2, 2.4, p.z0 - 1.6] : [ST.policy[0] + i * 2.2, ST.policy[1], ST.policy[2]];
-    seen.add(key);
-  }
   // The gateways, north of the fleet: the VMs labelled as one, and any a decision names that
   // is not among them (a gateway's name is its own claim, ADR-0062, and need not match its VM's).
   const gws = new Map();
@@ -462,12 +473,24 @@ function layout() {
     const key = `gw/${g}`;
     const n = node(key, 'gateway');
     n.obj = gws.get(g); n.name = g;
-    n.goal = [cx + (gwNames.length > 1 ? -span / 2 + (span * i) / (gwNames.length - 1) : 0), 7, FLEET.z0 - 14];
+    n.goal = add([cx + (gwNames.length > 1 ? -span / 2 + (span * i) / (gwNames.length - 1) : 0), 7, FLEET.z0 - 14], offsetOf(key));
     seen.add(key);
   });
+  // The policies (by namespace, then name): a row north of the gateways' and west of the
+  // westmost one, spread so each stands clear with its name under it.
+  const gwWest = cx - (gwNames.length > 1 ? span / 2 : 0);
+  const pols = [...S.policy.entries()].sort((a, b) => nsOf(a[1]).localeCompare(nsOf(b[1])) || nameOf(a[1]).localeCompare(nameOf(b[1])));
+  const polZ = FLEET.z0 - 18;
+  pols.forEach(([key, o], i) => {
+    const n = node(key, 'policy');
+    n.obj = o;
+    n.goal = add([gwWest - 7 - (pols.length - 1 - i) * POLICY_SP, 8, polZ], offsetOf(key));
+    seen.add(key);
+  });
+  const polWest = pols.length ? gwWest - 7 - (pols.length - 1) * POLICY_SP : Infinity;
   for (const [key, n] of nodes) if (!seen.has(key) && !n.gone) n.gone = true;
   // The frame: from the broker to the fleet's east edge, the gateways to SPIRE or the racks' end.
-  const x0 = Math.min(ST.broker[0] - 3, cx - span / 2 - 3), x1 = Math.max(FLEET.x0 + fleetW + 2, cx + span / 2 + 3), z0 = FLEET.z0 - 17, z1 = Math.max(provEnd, ST.spire[2] + 3);
+  const x0 = Math.min(ST.broker[0] - 3, cx - span / 2 - 3, polWest - 3), x1 = Math.max(FLEET.x0 + fleetW + 2, cx + span / 2 + 3), z0 = Math.min(FLEET.z0 - 17, polZ - 3), z1 = Math.max(provEnd, ST.spire[2] + 3);
   fit = { center: [(x0 + x1) / 2, 0, (z0 + z1) / 2], dist: clamp(Math.max(x1 - x0, (z1 - z0) * 1.3) * 0.95, 30, 160) };
   THEATRE.fogFar = Math.max(90, fit.dist * 2);
   if (!view.touched) { view.goal = fit.center; view.dist = fit.dist; }
@@ -523,7 +546,8 @@ function setLabel(l, title, detail, cls) {
   if (cls != null && l.cls !== cls) { l.el.className = `lbl ${cls}`; l.cls = cls; }
 }
 const hostLabels = [];
-function placeLabel(l, p, show, alpha = 1) {
+// A label beside its point, or centred under it (`under`).
+function placeLabel(l, p, show, alpha = 1, under = false) {
   if (!l) return;
   const hide = () => { if (l.shown !== false) { l.el.style.opacity = '0'; l.el.style.pointerEvents = 'none'; l.shown = false; } };
   const c = toCam(p);
@@ -531,11 +555,12 @@ function placeLabel(l, p, show, alpha = 1) {
   const [x, y] = proj(c);
   if (y < 52 || y > H - 84 || x < -10 || x > W - 30) return hide();
   if (!l.w) l.w = l.el.offsetWidth || 80;
-  const lx = clamp(x + 12, 8, Math.max(8, W - l.w - 8));
-  l.el.style.transform = `translate(${Math.round(lx)}px, ${Math.round(y - 10)}px)`;
+  const lx = clamp(under ? x - l.w / 2 : x + 12, 8, Math.max(8, W - l.w - 8));
+  l.el.style.transform = `translate(${Math.round(lx)}px, ${Math.round(under ? y + 2 : y - 10)}px)`;
   l.el.style.opacity = String(clamp(fog(c[2]) * 1.2 * alpha, 0.25, 1));
   l.el.style.pointerEvents = '';
   l.el.classList.toggle('sel', view.sel === l.key);
+  l.el.classList.toggle('under', under);
   l.shown = true;
 }
 const issuersSeen = () => [...new Set([...S.sandbox.values()].map((o) => at(o, 'spec.subject.issuer')).filter(Boolean))];
@@ -597,9 +622,9 @@ function updateLabels() {
     } else if (n.kind === 'policy') {
       if (!n.label) n.label = label(n, 'policy');
       n.label.key = n.key;
-      const v = at(n.obj, 'status.bundleVersion');
-      setLabel(n.label, `${nameOf(n.obj)}`, `SandboxPolicy${v != null ? ' · bundle ' + v : ''}`);
-      placeLabel(n.label, add(n.pos, [0, 1.3, 0]), !n.gone, n.alpha);
+      // The name only; the kind and the bundle are in its panel, a click away.
+      setLabel(n.label, nameOf(n.obj), '');
+      placeLabel(n.label, add(n.pos, [0, -1.35, 0]), !n.gone, n.alpha, true);
     } else if (n.kind === 'ns') {
       if (!n.label) n.label = label(n, 'ns');
       n.label.key = n.key;
@@ -618,7 +643,8 @@ function updateLabels() {
       const ix = index(), hk = ix.hostByProvider.get(nameOf(n.obj));
       const nv = (ix.vmsOnProvider.get(nameOf(n.obj)) || []).length;
       setLabel(n.label, nameOf(n.obj), [hk ? `host ${nameOf(S.host.get(hk))}` : '', `${nv} VM${nv === 1 ? '' : 's'}`].filter(Boolean).join(' · '));
-      placeLabel(n.label, add(n.pos, [2.6, 0.6, 1.4]), !n.gone, n.alpha);
+      // Under the slab's front edge, centred.
+      placeLabel(n.label, add(n.pos, [0, -0.5, 1.4]), !n.gone, n.alpha, true);
     } else if (n.kind === 'vm') {
       if (!n.label) n.label = label(n, 'vm');
       n.label.key = n.key;
@@ -720,7 +746,6 @@ function frame(now) {
 }
 
 // A raised arc from a to b, as points.
-const arcPts = (a, b, h, n = 14) => Array.from({ length: n + 1 }, (_, i) => arc(a, b, h, i / n));
 
 // Faint lines of one colour and dash, gathered over a frame and stroked once: a fleet's worth of
 // connections costs a few strokes, not one per line.
@@ -1381,13 +1406,36 @@ function bind() {
   let drag = null;
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
+    // Ctrl: move what is under the pointer (the layout, theatre.js).
+    if (e.ctrlKey && LAYOUT.editable) {
+      const n = nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
+      const flat = !n || n.kind === 'agent' || n.kind === 'vm';
+      const m = key && beginMove(e.clientX, e.clientY, n.pos, moveUpright(e.shiftKey, flat));
+      if (m) {
+        drag = { move: m, key, moved: false };
+        view.touched = true;
+        canvas.setPointerCapture(e.pointerId);
+        canvas.classList.add('moving');
+      }
+      return;
+    }
     drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, target: view.target.slice(), pan: e.button === 2 || e.shiftKey || e.metaKey, moved: false };
     canvas.setPointerCapture(e.pointerId);
     canvas.classList.add('dragging');
     view.idle = 0;
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (!drag) { view.hover = pickAt(e.clientX, e.clientY); canvas.classList.toggle('pick', !!view.hover); return; }
+    if (!drag) {
+      view.hover = pickAt(e.clientX, e.clientY);
+      canvas.classList.toggle('pick', !!view.hover);
+      canvas.classList.toggle('movable', e.ctrlKey && LAYOUT.editable && !!view.hover && !!groupOf(nodes.get(view.hover)));
+      return;
+    }
+    if (drag.move) {
+      const d = drag.move.step(e.clientX, e.clientY);
+      if (len(d) > 0) { moveGroup(drag.key, d); drag.moved = true; }
+      return;
+    }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (Math.hypot(dx, dy) > 4) { drag.moved = true; view.touched = true; }
     view.idle = 0;
@@ -1402,12 +1450,18 @@ function bind() {
     }
   });
   const end = (e) => {
-    if (drag && !drag.moved && e.type === 'pointerup') select(pickAt(e.clientX, e.clientY));
+    if (drag?.move) canvas.classList.remove('moving');
+    else if (drag && !drag.moved && e.type === 'pointerup') select(pickAt(e.clientX, e.clientY));
     drag = null;
     canvas.classList.remove('dragging');
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
+  // Ctrl-double-click: back where the layout stands it.
+  canvas.addEventListener('dblclick', (e) => {
+    const n = e.ctrlKey && LAYOUT.editable && nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
+    if (key && LAYOUT.moved[key]) moveGroup(key, mul(LAYOUT.moved[key], -1));
+  });
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     view.idle = 0; view.touched = true;
@@ -1438,6 +1492,11 @@ function connect() {
 resize();
 window.addEventListener('resize', resize);
 bind();
+// The saved layout: the base stations moved in place; the rest, layout() offsets.
+loadLayout('admin').then((moved) => {
+  for (const [key, p] of BASE_AT) if (moved[key]) shiftPoints([p], moved[key]);
+  dirty = true;
+});
 connect();
 paintBar();
 requestAnimationFrame(frame);

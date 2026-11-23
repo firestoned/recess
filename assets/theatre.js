@@ -40,6 +40,8 @@ function arc(a, b, h, t) {
     u * u * a[2] + 2 * u * t * c[2] + t * t * b[2],
   ];
 }
+// The points of that arc, `n` segments: for an edge that should not cut through what lies between.
+const arcPts = (a, b, h, n = 14) => Array.from({ length: n + 1 }, (_, i) => arc(a, b, h, i / n));
 
 // ------------------------------------------------------------------------------ palette
 
@@ -173,20 +175,24 @@ const mixColor = (a, b, t) => [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i
 
 // ------------------------------------------------------------------------------ the base stations
 
-// Where the infrastructure stands, the same in every view.
+// Where the infrastructure stands, the same in every view. The issuer stands low, toward the
+// provider plane. The Kubernetes API stands south toward SPIRE, so its edge to SPIRE (the
+// entries it declares) runs nearly north-south: about 97 degrees to the Admin view's row of
+// providers, which runs east-west. Its Secrets vault goes with it.
 const ST = {
-  issuer: [-15, 3.2, -15],
+  issuer: [-15, 0.7, 2],
   broker: [12, 0.4, -7],
-  api: [23, 0, -13],
+  api: [18.5, 0, -3.5],
+  // SPIRE on the same plane as OpenBao.
+  spire: [17, 0.6, 8],
 };
 ST.vault = add(ST.api, [5.6, -1.0, 3.6]);
 // The SandboxPolicy (notaio's signed bundle), above the road between the broker that reads it
 // and the API that holds the claim it governs.
-ST.policy = [17.5, 5.2, -16];
-// OpenBao, south of the road, beside the broker that asks it to seal; SPIRE south of OpenBao,
-// whose PKI is its upstream CA.
-ST.bao = [16, 0.6, 0.5];
-ST.spire = [17, 1.6, 8];
+ST.policy = [15.5, 5.2, -9];
+// OpenBao, as far from the API as from SPIRE (whose PKI it is the upstream CA of), a little
+// west of the line between them so the entries edge passes it by.
+ST.bao = [15.3, 0.6, 1.9];
 
 const SHAPES = {
   issuer: merge(prism(5, 1.1, 2.4, Math.PI / 10), prism(5, 0.55, 3.4, Math.PI / 10)),
@@ -291,3 +297,72 @@ const DESIGN = {
     pki: [['used by', "the SPIRE server, as its upstream CA: it signs the server's intermediate, rotated every ca_ttl"]],
   },
 };
+
+// ------------------------------------------------------------------------------ the layout
+
+// Ctrl-drag moves a station: across the floor when the camera looks down on it, in the
+// upright plane facing the camera when it looks level (Shift swaps the two); Ctrl-double-click
+// puts it back. Each move is kept as an offset from where the code stands it, per view, and
+// saved by the server on your machine (layout.json beside config.env), so the next load stands
+// it there again. A shared Recess shows the layout as shipped and saves nothing.
+const LAYOUT = { view: '', moved: {}, editable: false, timer: 0 };
+async function loadLayout(viewName) {
+  LAYOUT.view = viewName;
+  try {
+    const r = await fetch('/api/layout');
+    if (r.ok) {
+      const j = await r.json();
+      LAYOUT.editable = !!j.editable;
+      LAYOUT.moved = (j.views && j.views[viewName]) || {};
+    }
+  } catch { /* no layout: the code's own places */ }
+  for (const h of document.querySelectorAll('.layout-hint')) h.hidden = !LAYOUT.editable;
+  return LAYOUT.moved;
+}
+// The offset of `id`, plus `d`; one back to nothing is dropped. Saved a moment later.
+function noteMove(id, d) {
+  const o = add(LAYOUT.moved[id] || [0, 0, 0], d);
+  if (o.every((v) => Math.abs(v) < 0.005)) delete LAYOUT.moved[id]; else LAYOUT.moved[id] = o;
+  saveLayout();
+}
+function saveLayout() {
+  if (!LAYOUT.editable) return;
+  clearTimeout(LAYOUT.timer);
+  LAYOUT.timer = setTimeout(() => {
+    fetch('/api/layout', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ view: LAYOUT.view, moved: LAYOUT.moved }, (_, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v)),
+    }).catch(() => {});
+  }, 200);
+}
+// Move each point in place (a point listed twice, or shared by two lists, moves once).
+function shiftPoints(points, d) {
+  for (const p of new Set(points)) { p[0] += d[0]; p[1] += d[1]; p[2] += d[2]; }
+}
+// The ray from the camera through the screen point (x, y).
+const screenRay = (x, y) => norm(add(cam.f, add(mul(cam.r, (x - cam.cx) / cam.F), mul(cam.u, (cam.cy - y) / cam.F))));
+// Where that ray meets the floor at height p[1], or (upright) the plane through p facing the camera.
+function rayHit(x, y, p, upright) {
+  const n = upright ? norm([cam.f[0], 0, cam.f[2]]) : [0, 1, 0];
+  const d = screenRay(x, y), dn = dot(d, n);
+  if (Math.abs(dn) < 1e-3) return null;
+  const t = dot(sub(p, cam.pos), n) / dn;
+  return t > 0 ? add(cam.pos, mul(d, t)) : null;
+}
+// Whether a move goes in the upright plane: when the camera looks about level, unless Shift
+// (or the thing only stands on the floor).
+const moveUpright = (shift, flat = false) => !flat && (Math.abs(cam.f[1]) < 0.35) !== shift;
+// A move begun at (x, y) on a station at p; step() gives how far it went since the last step.
+function beginMove(x, y, p, upright) {
+  const m = { upright, p: p.slice(), last: rayHit(x, y, p, upright) };
+  if (!m.last) return null;
+  m.step = (x2, y2) => {
+    const h = rayHit(x2, y2, m.p, m.upright);
+    if (!h) return [0, 0, 0];
+    const d = sub(h, m.last);
+    m.last = h;
+    return m.upright ? d : [d[0], 0, d[2]];
+  };
+  return m;
+}

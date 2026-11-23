@@ -15,6 +15,7 @@ mod form;
 mod kubeinfo;
 mod phases;
 mod probe;
+mod proxy;
 mod secrets;
 mod settings;
 mod signin;

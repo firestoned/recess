@@ -34,6 +34,8 @@
 .lbl.agent.exited b { color: var(--ok); }
 .lbl.gateway b { color: var(--carrier); font-size: 11.5px; }
 .lbl.policy b { color: var(--policy); }
+/* A label centred under its icon (policies, providers). */
+.lbl.under { text-align: center; }
 .lbl.ns b { color: var(--ink); font-size: 11px; letter-spacing: .18em; }
 .lbl.broker b { color: var(--ident); }
 

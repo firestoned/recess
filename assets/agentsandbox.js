@@ -37,16 +37,25 @@ function digits(text, w = 0.9, h = 0.9, gap = 0.5) {
 
 // ------------------------------------------------------------------------------ the world
 
-// The run's own places, beside the base theatre's stations.
+// The run's own places, beside the base theatre's stations. You (sheet 01, then your card on
+// its rolodex) stand close to the issuer you sign in with.
 Object.assign(ST, {
-  you: [0, 0, 0],
+  you: [-7, 0, 1],
   vm: [35, 0, -6],
   // North of the VM, at right angles to the road in: clear of the gateways and the audiences east of it.
   end: [36, 0.6, -21],
 });
-// Sheet 02, mediatore sandbox create: its own place after the login, on the way to the broker.
-ST.form = [7.5, 0, -2];
+// Sheet 02, mediatore sandbox create: its own place after the login, close by your card on its
+// rolodex, on the way to the broker.
+ST.form = add(ST.you, [7.5, 0, -2]);
 ST.cage = ST.vm;
+// The OIDC issuer stands up and to the left of sheet 01, so the first view (the camera 9 south
+// of the sheet, 50 degrees high) shows the tower left of the login form: about a fifth of the
+// way in from the left edge, above the middle, at 1.6:1. The Admin view keeps the base place.
+ST.issuer = add(ST.you, [-6.2, 1.5, -4]);
+// Here OpenBao stands below SPIRE, at 7 o'clock to it as the camera looks north: south and a
+// little west, 6.5 away. (The Admin view keeps the base theatre's place, between the API and SPIRE.)
+ST.bao = add(ST.spire, [-3.25, 0, 5.6]);
 
 // The legs, in journey order; p is how much of each is travelled (drawn solid).
 const LEGS = {
@@ -136,6 +145,9 @@ const entriesShown = () => { if (entriesSet()) entriesWereSet = true; return ent
 const attested = () => !!(model.data.run.object?.status?.record?.nodeId || vmOf().attestationSubject);
 // The guest holds this claim's identities from its attestation until the release.
 const svidLive = () => (attested() || entriesShown()) && D.act >= 7 && D.act < 9;
+// The VM attested (by its TPM) while it is this run's: from the claim's write to its release.
+const vtpmLive = () => attested() && D.act >= 5 && D.act < 9;
+const vtpmPts = () => arcPts(add(ST.spire, [0, 1.9, 0]), add(ST.vm, [0, 1.6, 0]), 5, 16);
 const sealedCount = () => (model.data.seal.kubeSecrets || []).length;
 // Where the claim is authorized, in the order it meets each place, and what each has decided
 // as far as Recess can see: 'ok', 'bad', 'gaps' (shadow mode: allowed, but enforce would not),
@@ -323,7 +335,7 @@ function mkPaper(home, formId, W, H) {
 }
 const PAPERS = { login: mkPaper(ST.you, 'sheet-login', 4.4, 4.6), create: mkPaper(ST.form, 'sheet-create', 6, 6.6) };
 // The camera square to each sheet while it is being written.
-const POSE = { login: { pos: [0, 0, 9], target: [0, 0, 0] }, create: { pos: add(ST.form, [0, 0, 9]), target: ST.form } };
+const POSE = { login: { pos: add(ST.you, [0, 0, 9]), target: ST.you.slice() }, create: { pos: add(ST.form, [0, 0, 9]), target: ST.form } };
 // flip: 0 the face (the address), 1 the back (the flap and the seal); seal: the wax seal pressed.
 const env = { pos: [0, 0, 0], scale: 0, lock: 0, open: 0, sink: 0, flip: 1, seal: 1, color: C.wire, leg: null };
 // youCard: sheet 01 turned into your card on its rolodex, from 0 to 1, once you are signed in.
@@ -808,6 +820,9 @@ function drawStations() {
   drawSpire(entriesShown() || attested(), t);
   if (entriesShown() && act >= 5 && act < 9) lines(BASE_EDGES.entries(), [[0, 1]], C.spire, 0.55, 1.2, { glow: false });
   if (svidLive()) lines([add(ST.spire, [0.6, -1.2, 0.4]), add(ST.vm, [-1.6, 1.4, -1.4])], [[0, 1]], C.spire, 0.75, 1.3, { dash: [3, 5], dashOffset: -clock * 14 });
+  // The VM's vTPM attestation, as in the Admin view: its SPIRE agent proved the VM with its TPM
+  // at boot and holds the node SVID from then on.
+  if (vtpmLive()) { const pts = vtpmPts(); lines(pts, chain(pts.length), C.spire, view.sel?.id === 'vtpm' ? 0.85 : 0.45, view.sel?.id === 'vtpm' ? 1.4 : 1.1, { dash: [3, 5], glow: false }); }
   // OpenBao: the transit key glows once the seal has used it. One edge, from the broker.
   const bOn = act >= 6 && (sealedCount() > 0 || fx.sealLit > 0);
   drawBao(bOn, t);
@@ -928,7 +943,7 @@ function drawFx(dt) {
 
 // Live, the director frames the run; free, the camera is the viewer's: it flies to what was
 // clicked and pans, orbits and zooms around it until "Follow live" (or Esc) hands it back.
-const view = { mode: 'live', sel: null, hover: null, target: [0, 0, 0], off: [-3, 3, 11] };
+const view = { mode: 'live', sel: null, hover: null, target: ST.you.slice(), off: [-3, 3, 11] };
 function wantCamera() {
   if (view.mode === 'free') return { pos: add(view.target, view.off), target: view.target };
   if (hop) return hopPose();
@@ -1073,6 +1088,7 @@ const EDGES = [
   { id: 'transit', name: 'Broker → OpenBao', pts: BASE_EDGES.transit, show: () => D.act >= 6 && sealedCount() > 0 },
   { id: 'entries', name: 'API → SPIRE', pts: BASE_EDGES.entries, show: () => entriesShown() && D.act >= 5 && D.act < 9 },
   { id: 'svid', name: 'SPIRE → VM', pts: () => [add(ST.spire, [0.6, -1.2, 0.4]), add(ST.vm, [-1.6, 1.4, -1.4])], show: () => svidLive() },
+  { id: 'vtpm', name: 'VM vTPM → SPIRE', pts: vtpmPts, show: () => vtpmLive() },
   { id: 'pki', name: 'OpenBao → SPIRE', pts: BASE_EDGES.pki, show: () => ['spire', 'openbao', 'pki'].includes(view.sel?.id) },
   { id: 'bundle', name: 'Policy → broker', pts: () => [add(ST.policy, [0, -1.2, 0]), add(ST.broker, [0, 1.2, 0])], show: () => !!policyOf().name && D.act >= 4 },
 ];
@@ -1231,14 +1247,14 @@ function who(fallback = 'you') {
   return id.username || se.login || id.email || id.display || id.subject || fallback;
 }
 const L = {
-  issuer: label(add(ST.issuer, [1.6, 1.2, 0]), 'ident', 'issuer'),
-  broker: label(add(ST.broker, [2.2, 0.8, 0]), '', 'broker'),
-  api: label(add(ST.api, [2.2, 1.2, 0]), '', 'api'),
-  vault: label(add(ST.vault, [0.9, 0.9, 0]), 'seal', 'vault'),
-  vm: label(add(ST.vm, [2.3, 1.6, 0]), '', 'vm'),
-  cage: label(add(ST.cage, [-0.6, -1.3, 1]), '', 'cage'),
-  end: label(add(ST.end, [2.8, 1.2, 0]), '', 'end'),
-  you: label(add(ST.you, [1.4, 1.0, 0]), '', 'you'),
+  issuer: label(() => add(ST.issuer, [1.6, 1.2, 0]), 'ident', 'issuer'),
+  broker: label(() => add(ST.broker, [2.2, 0.8, 0]), '', 'broker'),
+  api: label(() => add(ST.api, [2.2, 1.2, 0]), '', 'api'),
+  vault: label(() => add(ST.vault, [0.9, 0.9, 0]), 'seal', 'vault'),
+  vm: label(() => add(ST.vm, [2.3, 1.6, 0]), '', 'vm'),
+  cage: label(() => add(ST.cage, [-0.6, -1.3, 1]), '', 'cage'),
+  end: label(() => add(ST.end, [2.8, 1.2, 0]), '', 'end'),
+  you: label(() => add(ST.you, [1.4, 1.0, 0]), '', 'you'),
   env: label(() => add(env.pos, [0.9, 0.5, 0])),
 };
 L.issuer.lit = () => D.act >= 1;
@@ -1257,8 +1273,8 @@ const BOXL = Array.from({ length: MAX_BOX }, (_, i) => Object.assign(label(() =>
 // Small parts are labelled only when the camera is close enough to read them, or when picked.
 const near = (at, dist, id) => len(sub(cam.pos, at)) < dist || view.sel?.id === id || view.hover?.id === id;
 L.tier = Object.assign(label(() => add(tierPos(), [0, (gwCount() - 1) * 0.9 + 1.7, 0]), 'carrier', null), { show: () => D.act >= 7 && (egressOf().checks || 0) > 0 });
-L.guest = Object.assign(label(add(GUEST, [-0.6, -0.55, 0.3]), '', 'guest'), { show: () => D.act >= 7 && near(GUEST, 15, 'guest') });
-L.proxy = Object.assign(label(add(PROXY, [0.3, -0.55, 0.3]), '', 'proxy'), { show: () => D.act >= 7 && near(PROXY, 15, 'proxy') });
+L.guest = Object.assign(label(() => add(GUEST, [-0.6, -0.55, 0.3]), '', 'guest'), { show: () => D.act >= 7 && near(GUEST, 15, 'guest') });
+L.proxy = Object.assign(label(() => add(PROXY, [0.3, -0.55, 0.3]), '', 'proxy'), { show: () => D.act >= 7 && near(PROXY, 15, 'proxy') });
 L.cage.show = () => D.act >= 7 && near(ST.cage, 17, 'cage');
 GWL.forEach((l, i) => { const base = l.show; l.show = () => base() && (near(gwPos(i), 20, `gw${i}`) || i === carrierIdx()); });
 L.env.show = () => env.scale > 0.5 && env.sink < 0.5 && D.busy && [4, 5, 7].includes(D.act);
@@ -1267,14 +1283,14 @@ L.vault.show = () => D.act >= 5 && vault.open < 0.4;
 L.api.show = () => vault.open < 0.4;
 L.broker.show = () => vault.open < 0.4;
 L.you.show = () => D.act >= 4 && !CARDS.you.shown;
-L.policy = label(add(ST.policy, [1.3, 1.1, 0]), 'policy', 'policy');
-L.spire = label(add(ST.spire, [1.3, 1.6, 0]), 'spire', 'spire');
+L.policy = label(() => add(ST.policy, [1.3, 1.1, 0]), 'policy', 'policy');
+L.spire = label(() => add(ST.spire, [1.3, 1.6, 0]), 'spire', 'spire');
 L.spire.lit = () => entriesSet() || attested();
-L.openbao = label(add(ST.bao, [1.1, 1.0, 0]), 'seal', 'openbao');
+L.openbao = label(() => add(ST.bao, [1.1, 1.0, 0]), 'seal', 'openbao');
 L.openbao.lit = () => D.act >= 6 && sealedCount() > 0;
 L.openbao.show = () => vault.open < 0.4;
 const AUTHZL = ['authz-broker', 'authz-api', 'authz-gw'].map((id) => Object.assign(label(() => add(authzById(id).at, [0.55, 0.35, 0]), 'authz', id), { id, show: () => authzById(id).show() && (near(authzById(id).at, 16, id) || authzById(id).state === 'bad') }));
-L.form = Object.assign(label(add(ST.form, [2.2, 1.6, 0]), '', 'form'), { show: () => D.act >= 4 && !CARDS.form.shown });
+L.form = Object.assign(label(() => add(ST.form, [2.2, 1.6, 0]), '', 'form'), { show: () => D.act >= 4 && !CARDS.form.shown });
 L.you.lit = () => true;
 
 function updateLabels() {
@@ -1338,6 +1354,23 @@ const CARDS = {
 for (const card of Object.values(CARDS)) {
   card.el.addEventListener('click', () => select('node', card.node));
 }
+
+// What a Ctrl-drag of each node moves (the layout, theatre.js): the station, and what stands
+// on it or is placed from it. The gateways, the audiences and the vault's boxes follow theirs.
+const MOVABLE = {
+  you: () => [ST.you, PAPERS.login.home, PAPERS.login.c, POSE.login.pos, POSE.login.target, CARDS.you.c],
+  form: () => [ST.form, PAPERS.create.home, PAPERS.create.c, POSE.create.pos, POSE.create.target, CARDS.form.c],
+  issuer: () => [ST.issuer],
+  broker: () => [ST.broker],
+  api: () => [ST.api],
+  vault: () => [ST.vault],
+  openbao: () => [ST.bao],
+  spire: () => [ST.spire],
+  policy: () => [ST.policy],
+  vm: () => [ST.vm, PROXY, GUEST],
+  end: () => [ST.end],
+};
+const moveNode = (id, d) => shiftPoints(MOVABLE[id](), d);
 
 // The rolodex: the front card (under the page's card), the cards fanned behind it on the
 // rod, the two wheels and the stand.
@@ -2206,6 +2239,7 @@ function describe(sel) {
   const edges = {
     transit: () => ({ title: 'Broker → OpenBao', summary: 'The broker asks OpenBao to encrypt each credential with the transit key, the sandbox UID as the key\'s context, and writes the envelope it gets back into a Secret. A read asks it to decrypt.', glance: [['envelopes', sealedCount() || null, 'seen']], sections: [['On the wire', stack([layer('HTTP', 'POST <mount>/encrypt/<key>, POST <mount>/decrypt/<key>', [['context', 'the sandbox UID', 'design'], ['auth', 'a short-lived OpenBao token from the Kubernetes login', 'design']]), layer('TLS', 'to OpenBao', [['trust', 'the configured CA', 'design']])])]], raw: null }),
     entries: () => ({ title: 'Kubernetes API → SPIRE', summary: 'The broker writes ClusterStaticEntry objects; the SPIRE Controller Manager, leader-elected beside the server, renders them into entries over a private socket. The broker never connects to SPIRE.', glance: [['entries', entries().length || null, 'seen'], ['set', entries().filter((e) => e.set).length || null, 'seen']], sections: [['On the wire', stack([layer('Kubernetes API', 'create and delete clusterstaticentries (spire.spiffe.io)', [['as', 'the broker\'s service account; admission allows two shapes under /banlieue/ only (ADR-0006)', 'design']]), layer('Unix socket', 'controller manager → server, never on the network', [], [], '')])]], raw: { entries: entries() } }),
+    vtpm: () => ({ title: 'Sandbox VM → SPIRE: vTPM attestation', summary: 'The VM\'s SPIRE agent proves the VM to the SPIRE server with its virtual TPM: the endorsement key\'s certificate (published in VirtualMachine.status.tpmEndorsementCertificates) and a quote the TPM signs. The server answers with the node SVID, named after the EK\'s hash, which the VM holds from boot, warm in its pool, until it is recycled.', glance: [['agent', spiffeOf().agent || null, 'seen'], ['node SVID', spiffeOf().node || null, spiffeOf().nodeSeen ? 'seen' : 'derived']], sections: [['On the wire', stack([layer('TPM attestation', 'the SPIRE agent\'s tpm plugin (ADR-0018)', [['proves', 'the EK certificate, and a quote signed by the TPM', 'design'], ['agent ID', spiffeOf().agent || 'spiffe://<td>/spire/agent/tpm/<ek hash>', spiffeOf().agent ? 'seen' : 'design']]), layer('TLS', 'agent → server, through the gateway relay (ADR-0027)', [['trust', 'the bundle fetched at boot (ADR-0037)', 'design']])])]], raw: null }),
     svid: () => ({ title: 'SPIRE → sandbox VM', summary: 'The guest\'s SPIRE agent attests the VM, then holds the node SVID and, while the claim\'s entry exists, the claim SVID; both rotate before they expire.', glance: [['agent', spiffeOf().agent || null, 'seen'], ['node SVID', spiffeOf().node || null, spiffeOf().nodeSeen ? 'seen' : 'derived']], sections: [['On the wire', stack([layer('SPIRE agent API', 'attestation, then SVID rotation', [['attestor', 'TPM, or x509pop with a host-signed certificate', 'design']]), layer('TLS', 'agent → server, through the gateway relay (ADR-0027)', [['trust', 'the bundle fetched at boot (ADR-0037)', 'design']])])]], raw: null }),
     pki: () => ({ title: 'OpenBao → SPIRE', summary: 'OpenBao\'s PKI is the SPIRE server\'s upstream authority: it signs the server\'s intermediate CA. Not part of any one run, so it is drawn only while SPIRE or OpenBao is picked.', glance: [], sections: [['On the wire', stack([layer('HTTP', 'sign the intermediate CA, every ca_ttl', [['plugin', 'UpstreamAuthority "vault"', 'design']])])]], raw: null }),
     bundle: () => {
@@ -2382,9 +2416,20 @@ function bindOrbit() {
   let drag = null;
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
+    // Ctrl: move the node under the pointer (the layout), at any point of the run.
+    if (e.ctrlKey && LAYOUT.editable) {
+      const hit = pick(e.clientX, e.clientY);
+      const m = hit?.kind === 'node' && MOVABLE[hit.id] && beginMove(e.clientX, e.clientY, nodeById(hit.id).at(), moveUpright(e.shiftKey));
+      if (m) {
+        drag = { move: m, id: hit.id, moved: false };
+        canvas.setPointerCapture(e.pointerId);
+        canvas.classList.add('moving');
+      }
+      return;
+    }
     if (!navigable()) return;
-    // Pan: the right button, or the left with Shift or Cmd (Ctrl elsewhere: Ctrl-click is the
-    // right button on a Mac).
+    // Pan: the right button, or the left with Shift or Cmd (Ctrl moves a node; on a Mac,
+    // Ctrl-click is also the right button).
     const pan = e.button === 2 || e.shiftKey || e.metaKey;
     if (pan) freeCamera();
     drag = { x: e.clientX, y: e.clientY, yaw: orbit.yaw, pitch: orbit.pitch, pan, target: view.target.slice(), moved: false };
@@ -2393,9 +2438,16 @@ function bindOrbit() {
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!drag) {
-      // Hover: what a click would pick.
+      // Hover: what a click would pick, or with Ctrl, what a drag would move.
+      const movable = e.ctrlKey && LAYOUT.editable ? pick(e.clientX, e.clientY) : null;
+      canvas.classList.toggle('movable', movable?.kind === 'node' && !!MOVABLE[movable.id]);
       view.hover = navigable() ? pick(e.clientX, e.clientY) : null;
       canvas.classList.toggle('pick', !!view.hover);
+      return;
+    }
+    if (drag.move) {
+      const d = drag.move.step(e.clientX, e.clientY);
+      if (len(d) > 0) { moveNode(drag.id, d); drag.total = add(drag.total || [0, 0, 0], d); drag.moved = true; }
       return;
     }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
@@ -2408,6 +2460,12 @@ function bindOrbit() {
     }
   });
   const end = (e) => {
+    if (drag?.move) {
+      if (drag.total) noteMove(drag.id, drag.total);
+      drag = null;
+      canvas.classList.remove('moving');
+      return;
+    }
     if (drag && !drag.moved && e.type === 'pointerup' && !drag.pan) {
       const hit = pick(e.clientX, e.clientY);
       if (hit) select(hit.kind, hit.id, { tab: hit.kind === 'node' && hit.id === 'cage' && model.lines.length ? 'output' : 'details' });
@@ -2424,6 +2482,13 @@ function bindOrbit() {
     orbit.zoom = clamp(orbit.zoom * Math.exp(e.deltaY * 0.001), 0.3, 3);
   }, { passive: false });
   canvas.addEventListener('dblclick', (e) => {
+    // Ctrl-double-click: the node back where the code stands it.
+    if (e.ctrlKey && LAYOUT.editable) {
+      const hit = pick(e.clientX, e.clientY);
+      const o = hit?.kind === 'node' && LAYOUT.moved[hit.id];
+      if (o) { const back = mul(o, -1); moveNode(hit.id, back); noteMove(hit.id, back); }
+      return;
+    }
     const hit = navigable() ? pick(e.clientX, e.clientY) : null;
     if (hit?.kind === 'node' && (hit.id === 'vault' || hit.id.startsWith('box'))) { if (hit.id === 'vault') toggleVault(); return; }
     orbit.yaw = 0; orbit.pitch = 0; orbit.zoom = 1;
@@ -2489,6 +2554,9 @@ async function init() {
   $('follow').addEventListener('click', followLive);
   $('linewrap').append(copyButton(() => model.lines.map((l) => l.text).join('\n')));
 
+  // The saved layout, before the first frame: each moved node where it was left.
+  for (const [id, d] of Object.entries(await loadLayout('agentsandbox'))) if (MOVABLE[id]) moveNode(id, d);
+  view.target = ST.you.slice();
   cfg = await (await fetch('/api/config')).json();
   cfg.login = cfg.login || {}; cfg.claim = cfg.claim || {};
   demo = !!cfg.demo;

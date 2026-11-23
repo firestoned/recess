@@ -154,6 +154,13 @@ gateway is a candidate, dashed, and the details say why; the demo's scripted wor
 | arrow keys | orbit |
 | `[` and `]` | the previous or next node |
 | Esc, "Follow live" | hand the camera back to the run |
+| Ctrl-drag | move a station: across the floor when looking down, upright when looking level (Shift swaps) |
+| Ctrl-double-click | put a moved station back |
+
+Moves are kept per view in `layout.json` beside `config.env` (`~/.config/recess/`), as offsets
+from where the code stands each thing, and read back on the next load. In the Admin view an
+agent moves its namespace's plot and a VM its pool's rack. A shared Recess (behind Dex) keeps
+the layout as shipped and saves nothing.
 
 The renderer is a small one on a 2D canvas, with no 3D library and nothing loaded from
 elsewhere; `prefers-reduced-motion` shortens every animation.

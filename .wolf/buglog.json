@@ -248,6 +248,19 @@
         "watch"
       ],
       "date": "2026-11-23"
+    },
+    {
+      "id": "bug-018",
+      "error_message": "AgentSandbox shows sheet 01 stamped \"signed \u00b7 you\" before anyone signs in",
+      "root_cause": "cli.js gained a global async function signedIn(near) for the Dex badge; agentsandbox.js already declares a global function signedIn() (the stamp animation). Classic scripts share one global scope, so the later declaration won and cli.js called the stamp animation on every page load.",
+      "fix": "Renamed the cli.js function to showSignedInUser; web.rs test no_two_scripts_on_a_page_declare_the_same_name checks every page's scripts for shared top-level names.",
+      "tags": [
+        "web",
+        "agentsandbox",
+        "cli.js",
+        "global-scope"
+      ],
+      "date": "2026-11-23"
     }
   ]
 }
