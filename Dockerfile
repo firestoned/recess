@@ -10,7 +10,7 @@
 # In a pod, run it shared behind Dex (deploy/): without --oidc-issuer it listens on loopback
 # only, which a pod's network does not reach.
 
-FROM docker.io/library/rust:1.99-slim-trixie@sha256:e97df055c54a05160e7c67ba3b2963de6ddb95903911baf8922dbcd1b394f698 AS build
+FROM docker.io/library/rust:1.99-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS build
 WORKDIR /src
 # The manifests first, so the dependencies are a layer of their own.
 COPY Cargo.toml Cargo.lock ./
@@ -23,7 +23,7 @@ COPY assets assets
 # The stub's binary is newer than nothing: touch so cargo rebuilds the real one.
 RUN touch src/main.rs && cargo build --release --locked
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:a10bdce4a54ae11746dd88386f9860c1d178d137b56166a620898ba1bf6001cd
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de
 LABEL org.opencontainers.image.title="recess" \
       org.opencontainers.image.description="Recess: every live agent in the cluster, read with each signed-in person's own RBAC" \
       org.opencontainers.image.source="https://github.com/firestoned/recess" \
