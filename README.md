@@ -327,3 +327,12 @@ and the rest of the run goes on.
 The steps inside the VM between "sandbox built" and the first output have no events of their
 own today. Telemetry from the guest (spans keyed by the claim UID) would turn the `inferred`
 steps into `observed` ones; the engine's step/event model is where it would plug in.
+
+## Contributing and licence
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) (every commit signed off and
+signed), the [Code of Conduct](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md) for
+reporting a vulnerability privately. How the project is run is in
+[GOVERNANCE.md](GOVERNANCE.md), and who maintains it in [MAINTAINERS.md](MAINTAINERS.md).
+
+Recess is licensed under the [Apache License, Version 2.0](LICENSE); see [NOTICE](NOTICE).
