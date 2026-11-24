@@ -261,6 +261,21 @@
         "global-scope"
       ],
       "date": "2026-11-23"
+    },
+    {
+      "id": "bug-019",
+      "timestamp": "2026-11-24T02:08:24Z",
+      "error_message": "Admin view stopped updating live (deleted gateways stayed on screen, 'live' still lit); a page reload showed the right state",
+      "file": "assets/admin.js, assets/agentsandbox.js, assets/theatre.js",
+      "root_cause": "frame() asked for the next animation frame only as its last line, so any error in one frame ended the loop for good: the inbox of server changes was never applied again. The inbox was also spliced whole before applying, so one bad message lost its batch, and dirty was cleared before layout() ran, so a failed layout was never retried.",
+      "fix": "theatre.js runFrames(step): asks for the next frame first, runs step in try/catch, logs a repeated error once. Both views start their loop through it. Admin applies each server change in its own try, and clears dirty only after layout succeeds.",
+      "tags": [
+        "web",
+        "admin",
+        "agentsandbox",
+        "realtime",
+        "frame-loop"
+      ]
     }
   ]
 }

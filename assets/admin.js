@@ -781,8 +781,12 @@ const floor = (() => {
 function frame(now) {
   const dt = Math.min(0.05, (now - (last || now)) / 1000);
   last = now; clock += dt;
-  if (inbox.length) { for (const m of inbox.splice(0)) apply(m); }
-  if (dirty) { dirty = false; layout(); notePackets(); paintBar(); }
+  // Each change on its own: one that fails is dropped alone, not with the rest of its batch.
+  for (const m of inbox.splice(0)) {
+    try { apply(m); } catch (err) { console.error('recess: a change from the server was not applied', m, err); }
+  }
+  // Cleared once the layout is done, so a layout that failed is tried again next frame.
+  if (dirty) { layout(); notePackets(); paintBar(); dirty = false; }
 
   // Nodes ease to their places; new ones rise in, gone ones fade and are dropped.
   const k = 1 - Math.exp(-dt * 4);
@@ -809,7 +813,6 @@ function frame(now) {
   updateLabels();
   flushOutput();
   if (stamp !== shownStamp && view.sel && clock - shownAt > 0.5) renderDetails();
-  requestAnimationFrame(frame);
 }
 
 // A raised arc from a to b, as points.
@@ -1575,4 +1578,4 @@ loadLayout('admin').then((moved) => {
 });
 connect();
 paintBar();
-requestAnimationFrame(frame);
+requestAnimationFrame(runFrames(frame));

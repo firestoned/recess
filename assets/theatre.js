@@ -125,6 +125,23 @@ const chain = (n, closed = false) => {
 };
 function polyline(pts, color, alpha, width, opts) { lines(pts, chain(pts.length), color, alpha, width, opts); }
 
+// The frame loop: `step` draws one frame, and the next is asked for before it runs. An error
+// in a frame is reported (once while it repeats) and the loop goes on: one bad frame must not
+// freeze the view, nor stop the live updates the frames apply.
+function runFrames(step) {
+  let reported = '';
+  const tick = (now) => {
+    requestAnimationFrame(tick);
+    try {
+      step(now);
+    } catch (err) {
+      const what = String(err?.stack || err);
+      if (what !== reported) { reported = what; console.error('recess: a frame failed; the next one runs', err); }
+    }
+  };
+  return tick;
+}
+
 // ------------------------------------------------------------------------------ shapes (local)
 
 function box(w, h, d) {

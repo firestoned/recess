@@ -1224,7 +1224,6 @@ function frame(now) {
   updateCards();
   placeLabels();
   placeCards();
-  requestAnimationFrame(frame);
 }
 
 // While the login is under way, the request goes to the issuer and comes back, on a loop.
@@ -2564,7 +2563,8 @@ async function init() {
   } else {
     $('issuer').focus();
   }
-  requestAnimationFrame((t) => { last = t; frame(t); });
+  const tick = runFrames(frame);
+  requestAnimationFrame((t) => { last = t; tick(t); });
 }
 
 init().catch((err) => { $('cap-title').textContent = 'Could not reach the server'; $('cap-detail').textContent = err.message; });
