@@ -775,6 +775,11 @@ const PEOPLE: [&str; 8] = [
     "ada", "grace", "alan", "edsger", "barbara", "ken", "frances", "donald",
 ];
 const GATEWAYS: [&str; 3] = ["gateway-01", "gateway-02", "gateway-03"];
+/// The audiences every demo policy grants and every demo agent names: (name, endpoint).
+const DEMO_AUDIENCES: [(&str, &str); 2] = [
+    ("anthropic", "api.anthropic.com:443"),
+    ("github", "api.github.com:443"),
+];
 /// Hosts a demo workload reaches: (kind, authority, audience).
 const HOSTS: [(&str, &str, &str); 6] = [
     ("tunnel", "pypi.org:443", ""),
@@ -953,7 +958,8 @@ fn demo_static(fleet: &Fleet) {
     {
         let obj = json!({"apiVersion": "sandbox.firestoned.io/v1alpha2", "kind": "SandboxPolicy",
             "metadata": {"name": name, "namespace": ns, "uid": format!("5d0c1b2a-0000-4000-8000-00000000b00{i}"), "creationTimestamp": now()},
-            "spec": {"profileRef": profile},
+            "spec": {"profileRef": profile, "audiences": DEMO_AUDIENCES.iter()
+                .map(|(name, endpoint)| json!({"name": name, "endpoints": [endpoint]})).collect::<Vec<_>>()},
             "status": {"bundleVersion": 7 + i, "conditions": [{"type": "Ready", "status": "True", "reason": "Signed"}]}});
         fleet.put("policy", format!("policy/{ns}/{name}"), obj);
         fleet.put("floor", format!("floor/banlieue-system/{ns}.{name}"), json!({"apiVersion": "mediatore.io/v1alpha1", "kind": "PolicyFloor",
@@ -978,6 +984,7 @@ fn sandbox_json(a: &Agent) -> Value {
             "labels": {"mediatore.io/claim-uid": a.claim_uid}},
         "spec": {"subject": {"issuer": "https://dex.example.com", "id": format!("Cg{}", a.who), "display": a.who},
             "ttlSeconds": 3600, "policyRef": {"name": policy},
+            "audiences": DEMO_AUDIENCES.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
             "workload": {"image": "ghcr.io/example/agent:1.4", "args": ["--task", "triage"], "restart": "Never", "logs": true}},
         "status": {"phase": "Pending"}});
     let s = &mut obj["status"];

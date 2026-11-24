@@ -52,6 +52,11 @@ const VSP = 2.8; // between members on a rack
 const RACK_PAD = 1.4; // the rack's margin round its members
 const YARD_PAD = 2.2; // a namespace's yard: its margin round its racks
 const YARD_FOOT = 2.8; // and the room under the last row for the racks' names
+// The gateways: one column, as AgentSandbox stacks them, this far apart up and in depth.
+const GW_DY = 5, GW_DZ = 1.6, GW_SCALE = 1.8;
+// The audiences: columns east of the gateways, stacked up as the gateways are (height reads
+// from high up, where depth is squashed), this many to a column, this far apart.
+const AUD_ROWS = 5, AUD_SX = 16, AUD_DY = 4.2;
 
 // ------------------------------------------------------------------------------ the data
 
@@ -172,6 +177,39 @@ function tierPos() {
   if (!gs.length) return null;
   return mul(gs.reduce((s, n) => add(s, n.pos), [0, 0, 0]), 1 / gs.length);
 }
+// The gateways' column, where layout() last stood it: its middle and how many it holds.
+const gwTier = { at: null, n: 0 };
+// Every audience on screen: each one a policy grants (with the endpoints it gives it, and which
+// policies) or an agent names, by name.
+function audiences() {
+  const by = new Map();
+  const get = (name) => {
+    if (!by.has(name)) by.set(name, { name, endpoints: new Set(), policies: [] });
+    return by.get(name);
+  };
+  for (const [key, o] of [...S.policy.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    for (const a of at(o, 'spec.audiences') || []) {
+      if (!a?.name) continue;
+      const e = get(a.name);
+      for (const x of a.endpoints || []) e.endpoints.add(x);
+      e.policies.push(key);
+    }
+  }
+  for (const o of S.sandbox.values()) for (const name of at(o, 'spec.audiences') || []) if (typeof name === 'string') get(name);
+  return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+// The audience a route reached: the one it names, else the one whose endpoint is its host.
+function audienceOfRoute(r) {
+  if (r.audience) return r.audience;
+  const host = String(r.authority || '').replace(/:443$/, '');
+  for (const n of nodes.values()) {
+    if (n.kind !== 'audience' || n.gone) continue;
+    for (const e of n.info.endpoints) if (e === r.authority || e.replace(/:443$/, '') === host) return n.name;
+  }
+  return '';
+}
+// The agents that name an audience, live or just exited.
+const namingAudience = (name) => agents().filter((a) => !a.gone && (at(a.obj, 'spec.audiences') || []).includes(name));
 const routesOf = (eg) => (eg?.e.routes || []).slice().sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
 const carrierOf = (eg) => routesOf(eg)[0]?.gateway || '';
 // The agent's SPIRE entries: its claim's, and the node's under the same agent.
@@ -334,7 +372,7 @@ function ago(ts) {
 // namespaces, pools and their VMs. Nodes persist across changes and ease to where the layout
 // puts them; a gone one fades out.
 const nodes = new Map();
-const view = { target: [30, 0, 0], goal: null, yaw: -0.3, pitch: 0.62, dist: 55, sel: null, hover: null, idle: 0, filter: '', only: null, shift: 0, touched: false };
+const view = { target: [30, 0, 0], goal: null, yaw: -0.3, pitch: 0.62, dist: 55, sel: null, hover: null, marked: new Set(), idle: 0, filter: '', only: null, shift: 0, touched: false };
 const SP = 3.6; // between cages on a plot
 const CAGE_TOP = 0.85; // half a cage: where its lines leave from
 let fit = { center: [30, 0, 0], dist: 55 };
@@ -353,13 +391,16 @@ const BASE = [['issuer', 'issuer', ST.issuer], ['broker', 'broker', ST.broker], 
 const BASE_AT = new Map(BASE.map(([key, , p]) => [key, p]));
 // What a Ctrl-drag of a node moves (the layout, theatre.js): a base station itself; an agent,
 // its namespace's plot; a pool, or a VM in one, its namespace's yard, with every rack and VM
-// in it (a rack never leaves its yard); a gateway, a policy or a provider, itself.
+// in it (a rack never leaves its yard); a gateway, the column of them, in its circle; an
+// audience, the block of them; a policy or a provider, itself.
 // Each is kept as an offset by that key; layout() adds it.
 function groupOf(n) {
   if (n.kind === 'agent') return `ns/${nsOf(n.obj)}`;
   if (n.kind === 'vm') return n.pool ? `yard/${nsOf(S.pool.get(n.pool))}` : null;
   if (n.kind === 'pool') return `yard/${nsOf(n.obj)}`;
-  return BASE_AT.has(n.key) || ['ns', 'yard', 'gateway', 'policy', 'provider'].includes(n.kind) ? n.key : null;
+  if (n.kind === 'gateway') return 'gateways';
+  if (n.kind === 'audience') return 'audiences';
+  return BASE_AT.has(n.key) || ['ns', 'yard', 'policy', 'provider'].includes(n.kind) ? n.key : null;
 }
 const offsetOf = (key) => LAYOUT.moved[key] || [0, 0, 0];
 // Move a group by d: a base station in place (its edges are drawn from it), the rest by
@@ -369,6 +410,23 @@ function moveGroup(key, d) {
   noteMove(key, d);
   layout();
   for (const n of nodes.values()) if (n.pos && groupOf(n) === key) n.pos = n.goal.slice();
+}
+// Several groups by the same d, with one layout: what a Shift-Cmd marquee marked.
+function moveGroups(keys, d) {
+  for (const key of keys) {
+    if (BASE_AT.has(key)) shiftPoints([BASE_AT.get(key)], d);
+    noteMove(key, d);
+  }
+  layout();
+  for (const n of nodes.values()) if (n.pos && keys.has(groupOf(n))) n.pos = n.goal.slice();
+}
+// Take hold of what node n stands in: every marked group when n is in one, else its own.
+function holdNode(e, n, flat) {
+  const key = n && groupOf(n);
+  if (!key) return;
+  const keys = view.marked.has(key) ? new Set(view.marked) : null;
+  const shift = keys ? (d) => { view.idle = 0; moveGroups(keys, d); } : (d) => { view.idle = 0; moveGroup(key, d); };
+  if (takeHold(e, key, n.pos, flat, shift, true)) view.touched = true;
 }
 
 // Boxes in rows: each item's width, wrapped at about the square root of the whole, rows centred
@@ -518,18 +576,35 @@ function layout() {
   for (const o of S.vm.values()) if (isGateway(o)) gws.set(nameOf(o), o);
   for (const o of S.sandbox.values()) for (const r of egressOf(o)?.e.routes || []) if (r.gateway && !gws.has(r.gateway)) gws.set(r.gateway, null);
   const gwNames = [...gws.keys()].sort();
-  // Spread wide enough to tell apart from high up: at least 14 between them.
-  const span = Math.max(fleetW * 1.1, (gwNames.length - 1) * 14);
+  // One column in its circle, as AgentSandbox draws the tier: up, and a little in depth, so
+  // each one and its name has its own place.
+  const tierAt = add([cx, 9, FLEET.z0 - 14], offsetOf('gateways'));
   gwNames.forEach((g, i) => {
     const key = `gw/${g}`;
     const n = node(key, 'gateway');
     n.obj = gws.get(g); n.name = g;
-    n.goal = add([cx + (gwNames.length > 1 ? -span / 2 + (span * i) / (gwNames.length - 1) : 0), 7, FLEET.z0 - 14], offsetOf(key));
+    const m = i - (gwNames.length - 1) / 2;
+    n.goal = add(tierAt, [0, -m * GW_DY, m * GW_DZ]);
     seen.add(key);
   });
+  gwTier.at = tierAt; gwTier.n = gwNames.length;
+  // The audiences, east of the gateways: where the gateways let the agents reach. Each one a
+  // policy grants or an agent names, with the endpoints the policies give it.
+  const auds = audiences();
+  // Centred on the gateways' height, the first at the top.
+  const audRows = Math.min(auds.length, AUD_ROWS);
+  const audAt = add([cx + 24, 9 - ((audRows - 1) * AUD_DY) / 2, FLEET.z0 - 14], offsetOf('audiences'));
+  auds.forEach((a, i) => {
+    const key = `aud/${a.name}`;
+    const n = node(key, 'audience');
+    n.obj = null; n.name = a.name; n.info = a;
+    n.goal = add(audAt, [Math.floor(i / AUD_ROWS) * AUD_SX, (audRows - 1 - (i % AUD_ROWS)) * AUD_DY, 0]);
+    seen.add(key);
+  });
+  const audEast = auds.length ? audAt[0] + Math.floor((auds.length - 1) / AUD_ROWS) * AUD_SX + 8 : -Infinity;
   // The policies (by namespace, then name): a row north of the gateways' and west of the
   // westmost one, spread so each stands clear with its name under it.
-  const gwWest = cx - (gwNames.length > 1 ? span / 2 : 0);
+  const gwWest = cx - 4;
   const pols = [...S.policy.entries()].sort((a, b) => nsOf(a[1]).localeCompare(nsOf(b[1])) || nameOf(a[1]).localeCompare(nameOf(b[1])));
   const polZ = FLEET.z0 - 18;
   pols.forEach(([key, o], i) => {
@@ -541,7 +616,7 @@ function layout() {
   const polWest = pols.length ? gwWest - 7 - (pols.length - 1) * POLICY_SP : Infinity;
   for (const [key, n] of nodes) if (!seen.has(key) && !n.gone) n.gone = true;
   // The frame: from the broker to the fleet's east edge, the gateways to SPIRE or the racks' end.
-  const x0 = Math.min(ST.broker[0] - 3, cx - span / 2 - 3, polWest - 3), x1 = Math.max(FLEET.x0 + fleetW + 2, cx + span / 2 + 3), z0 = Math.min(FLEET.z0 - 17, polZ - 3), z1 = Math.max(provEnd, ST.spire[2] + 3);
+  const x0 = Math.min(ST.broker[0] - 3, cx - 6, polWest - 3), x1 = Math.max(FLEET.x0 + fleetW + 2, cx + 6, audEast), z0 = Math.min(FLEET.z0 - 17, polZ - 3), z1 = Math.max(provEnd, ST.spire[2] + 3);
   fit = { center: [(x0 + x1) / 2, 0, (z0 + z1) / 2], dist: clamp(Math.max(x1 - x0, (z1 - z0) * 1.3) * 0.95, 30, 160) };
   THEATRE.fogFar = Math.max(90, fit.dist * 2);
   if (!view.touched) { view.goal = fit.center; view.dist = fit.dist; }
@@ -592,11 +667,10 @@ function label(n, cls) {
   el.addEventListener('click', (e) => { if (!moveKey(e)) select(n.key); });
   el.addEventListener('pointerdown', (e) => {
     if (HAND.m || !moveKey(e) || !n.pos) return;
-    const key = groupOf(n);
-    if (!key) return;
+    if (!groupOf(n)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (takeHold(e, key, n.pos, ['ns', 'yard', 'pool'].includes(n.kind), (d) => { view.idle = 0; moveGroup(key, d); }, true)) view.touched = true;
+    holdNode(e, n, ['ns', 'yard', 'pool'].includes(n.kind));
   });
   labelLayer.append(el);
   return { el, b, i, w: 0, title: null, detail: null, cls };
@@ -621,6 +695,8 @@ function placeLabel(l, p, show, alpha = 1, under = false) {
   l.el.style.opacity = String(clamp(fog(c[2]) * 1.2 * alpha, 0.25, 1));
   l.el.style.pointerEvents = '';
   l.el.classList.toggle('sel', view.sel === l.key);
+  const ln = view.marked.size && nodes.get(l.key);
+  l.el.classList.toggle('marked', !!ln && view.marked.has(groupOf(ln)));
   l.el.classList.toggle('under', under);
   l.shown = true;
 }
@@ -678,8 +754,14 @@ function updateLabels() {
       n.label.key = n.key;
       const l = load.get(n.name) || 0;
       const ready = n.obj ? condOf(n.obj, 'Ready')?.status : '';
-      setLabel(n.label, n.name, `${l} agent${l === 1 ? '' : 's'}${ready && ready !== 'True' ? ' · not ready' : ''}${n.obj ? '' : ' · no VM seen'}`);
-      placeLabel(n.label, add(n.pos, [1.7, 2.7, 0]), !n.gone, n.alpha);
+      setLabel(n.label, n.name, `${l} agent${l === 1 ? '' : 's'}${ready && ready !== 'True' ? ' · not ready' : ''}${n.obj ? '' : ' · no VM seen'}`, l ? 'gateway busy' : 'gateway');
+      placeLabel(n.label, add(n.pos, [1.6, 0.45, 0]), !n.gone, n.alpha);
+    } else if (n.kind === 'audience') {
+      if (!n.label) n.label = label(n, 'audience');
+      n.label.key = n.key;
+      const np = n.info.policies.length, na = namingAudience(n.name).filter((a) => live(a.obj)).length;
+      setLabel(n.label, n.name, [np ? `${np} polic${np === 1 ? 'y' : 'ies'}` : 'no policy grants it', na ? `${na} agent${na === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · '));
+      placeLabel(n.label, add(n.pos, [1.4, 0.4, 0]), !n.gone, n.alpha);
     } else if (n.kind === 'policy') {
       if (!n.label) n.label = label(n, 'policy');
       n.label.key = n.key;
@@ -764,7 +846,9 @@ function selHosts() {
     if (!g?.pos) return null;
     const i = perGw.get(r.gateway) || 0;
     perGw.set(r.gateway, i + 1);
-    return { r, gw: g, at: add(g.pos, [(i % 3 - 1) * 3, 4.2 + Math.floor(i / 3) * 1.8, 0.6]) };
+    // West of the column, a line each, three to a column: clear of the gateways above and
+    // below it and of the audiences east.
+    return { r, gw: g, at: add(g.pos, [-13 - Math.floor(i / 3) * 13, 1.5 - (i % 3) * 1.5, 0]) };
   }).filter(Boolean);
 }
 
@@ -773,8 +857,9 @@ function selHosts() {
 let clock = 0, last = 0;
 const floor = (() => {
   const pts = [], edges = [], y = FLOOR_Y - 0.4;
-  for (let x = -30; x <= 160; x += 5) { const o = pts.length; pts.push([x, y, -50], [x, y, 90]); edges.push([o, o + 1]); }
-  for (let z = -50; z <= 90; z += 5) { const o = pts.length; pts.push([-30, y, z], [160, y, z]); edges.push([o, o + 1]); }
+  // Twice the fleet's usual reach each way, round the same middle, so a moved piece stays on it.
+  for (let x = -125; x <= 255; x += 5) { const o = pts.length; pts.push([x, y, -120], [x, y, 160]); edges.push([o, o + 1]); }
+  for (let z = -120; z <= 160; z += 5) { const o = pts.length; pts.push([-125, y, z], [255, y, z]); edges.push([o, o + 1]); }
   return { pts, edges };
 })();
 
@@ -911,17 +996,49 @@ function drawScene(dt) {
       }
     }
   }
-  // Gateways, brighter for the load they carry; each reports its decisions to the broker.
+  // Gateways, as AgentSandbox draws them: Envoy's diamond in wire, one column, a circle round
+  // it; one carrying traffic turns faster and goes the carrier's colour, larger for its load.
+  // Each reports its decisions to the broker.
   const load = gatewayLoad();
+  const gwSel = sel?.kind === 'gateway';
   for (const n of nodes.values()) if (n.kind === 'gateway' && n.pos) {
     const l = load.get(n.name) || 0;
     const on = sel && (sel.key === n.key || (sel.kind === 'agent' && routesOf(egressOf(sel.obj)).some((r) => r.gateway === n.name)));
-    // A banlieue VM like the pools' members, larger, with Envoy's diamond turning over it.
-    const top = add(n.pos, [0, 1.9, 0]);
-    draw(SHAPES.member, n.pos, C.carrier, (l ? 0.85 : 0.4) * n.alpha, { scale: 1.6, width: on ? 1.8 : 1.2, glow: on });
-    draw(SHAPES.gwBig, top, C.carrier, (l ? 0.95 : 0.4) * n.alpha, { ry: t * 0.6, scale: 1 + Math.min(l, 12) * 0.04, width: on ? 2 : 1.3, glow: l > 0 || on });
-    if (l) draw(SHAPES.gatewayRing, n.pos, C.carrier, 0.35 * n.alpha, { scale: 1.6 + 0.1 * Math.sin(t * 2 + n.pos[0]) });
+    const ready = !n.obj || condOf(n.obj, 'Ready')?.status === 'True';
+    draw(SHAPES.gwBig, n.pos, l ? C.carrier : C.wire, (on ? 1 : l ? 0.95 : ready ? 0.75 : 0.3) * n.alpha,
+      { ry: t * (l ? 2.2 : 0.8) + n.pos[1], scale: GW_SCALE * (1 + Math.min(l, 12) * 0.04), width: on ? 2 : l ? 1.6 : 1.2, glow: ready || on, dash: ready ? null : [2, 3] });
     if (l) lines([n.pos, add(ST.broker, [0, 1.2, 0])], [[0, 1]], C.ident, 0.12 * n.alpha, 1, { dash: [3, 6] });
+  }
+  // The circle round the column, turned to face you; brighter while any gateway carries traffic.
+  if (gwTier.at && gwTier.n) {
+    const c = tierPos() || gwTier.at, busy = [...load.values()].some((x) => x > 0);
+    const ry = ((gwTier.n - 1) * GW_DY) / 2 + 2.6, rx = Math.max(3.6, ((gwTier.n - 1) * GW_DZ) / 2 + 3);
+    const right = norm([cam.r[0], 0, cam.r[2]]), N = 64, pts = [];
+    for (let k = 0; k < N; k++) { const a = (k / N) * Math.PI * 2; pts.push(add(c, add(mul(right, Math.cos(a) * rx), [0, Math.sin(a) * ry, 0]))); }
+    lines(pts, chain(N, true), C.wire, gwSel ? 0.85 : busy ? 0.6 + 0.15 * Math.sin(t * 2) : 0.45, gwSel || busy ? 1.4 : 1.1);
+  }
+  // The audiences, east of the gateways: a ring and its diamond, in identity's colour. A line
+  // from the column to each one a running agent reached (or names); bright for the one picked,
+  // or the picked agent's, gateway's or policy's.
+  const tc = tierPos() || gwTier.at;
+  const reached = new Map();
+  for (const a of agents()) {
+    if (a.gone || !live(a.obj)) continue;
+    for (const r of routesOf(egressOf(a.obj))) { const name = audienceOfRoute(r); if (name) reached.set(name, (reached.get(name) || 0) + r.count); }
+  }
+  const selAuds = new Set(
+    sel?.kind === 'agent' ? [...(at(sel.obj, 'spec.audiences') || []), ...routesOf(egressOf(sel.obj)).map(audienceOfRoute)]
+      : sel?.kind === 'policy' ? (at(sel.obj, 'spec.audiences') || []).map((a) => a?.name)
+        : sel?.kind === 'gateway' ? agents().flatMap((a) => routesOf(egressOf(a.obj)).filter((r) => r.gateway === sel.name).map(audienceOfRoute))
+          : []);
+  for (const n of nodes.values()) if (n.kind === 'audience' && n.pos) {
+    const on = sel?.key === n.key || view.hover === n.key || selAuds.has(n.name);
+    const used = reached.get(n.name) || 0, named = namingAudience(n.name).some((a) => live(a.obj));
+    draw(SHAPES.audience, n.pos, C.ident, (on ? 1 : used || named ? 0.85 : 0.5) * n.alpha, { ry: t * 0.5 + n.pos[0], scale: 1.5, width: on ? 1.8 : 1, glow: on || used > 0 });
+    if (tc && (used || named || on)) {
+      const pts = arcPts(tc, n.pos, 1.6, 12);
+      lines(pts, chain(pts.length), C.carrier, (on ? 0.8 : used ? 0.45 : 0.18) * n.alpha, on ? 1.5 : 1.1, used ? { glow: false } : { dash: [3, 5], glow: false });
+    }
   }
   // Policies: a signed sheet, turned to face you.
   for (const n of nodes.values()) if (n.kind === 'policy' && n.pos) {
@@ -1035,11 +1152,12 @@ function paintBar() {
   for (const b of box.children) { const t = String(counts[b.dataset.s]); if (b.firstChild.textContent !== t) b.firstChild.textContent = t; }
   const nsCount = new Set([...S.sandbox.values()].map(nsOf)).size;
   const gws = [...nodes.values()].filter((n) => n.kind === 'gateway' && !n.gone).length;
+  const nAud = [...nodes.values()].filter((n) => n.kind === 'audience' && !n.gone).length;
   const sources = new Set([...S.sandbox.values()].map((o) => egressOf(o)?.source || (checked(o) ? 'checks' : null)).filter(Boolean));
   const SRC = { status: 'status.egress (ADR-0063)', log: 'the broker log (ADR-0062)', checks: 'gateway checks in the broker log' };
   const src = sources.size ? `egress from ${[...sources].map((s) => SRC[s]).join(' and ')}` : 'no gateway decisions seen yet';
   const members = [...index().members.values()].reduce((s, l) => s + l.length, 0);
-  $('cap-detail').textContent = `${S.sandbox.size} agent${S.sandbox.size === 1 ? '' : 's'} in ${nsCount} namespace${nsCount === 1 ? '' : 's'} · ${S.pool.size} pool${S.pool.size === 1 ? '' : 's'}, ${members} VM${members === 1 ? '' : 's'} · ${gws} gateway${gws === 1 ? '' : 's'} · ${src}`;
+  $('cap-detail').textContent = `${S.sandbox.size} agent${S.sandbox.size === 1 ? '' : 's'} in ${nsCount} namespace${nsCount === 1 ? '' : 's'} · ${S.pool.size} pool${S.pool.size === 1 ? '' : 's'}, ${members} VM${members === 1 ? '' : 's'} · ${gws} gateway${gws === 1 ? '' : 's'} · ${nAud} audience${nAud === 1 ? '' : 's'} · ${src}`;
   const notes = Object.entries(S.notes).map(([k, t]) => `${KIND_NAME[k] || k}: ${t}`);
   $('cap-notes').hidden = !notes.length;
   $('cap-notes').textContent = notes.join(' · ');
@@ -1272,6 +1390,23 @@ const PANELS = {
     return out;
   },
 
+  audience: (n) => {
+    const a = n.info;
+    const naming = namingAudience(a.name);
+    const all = [];
+    for (const g of agents()) for (const r of routesOf(egressOf(g.obj))) if (audienceOfRoute(r) === a.name) all.push({ ...r, agent: g });
+    all.sort((x, y) => String(y.lastAt).localeCompare(String(x.lastAt)));
+    const out = [el('div', 'kicker', 'audience'), el('h2', null, a.name),
+      el('p', 'lede', 'A service the agents may reach through a gateway: a policy grants it, with its endpoints and rules, and the broker places its credential.'),
+      dl([['endpoints', [...a.endpoints].join(', ') || 'none a policy gives'],
+        ['named by', `${naming.length} agent(s) on screen`],
+        ['tunnels', `${all.filter((r) => r.verdict === 'allow').reduce((s, r) => s + r.count, 0)} allowed · ${all.filter((r) => r.verdict === 'deny').reduce((s, r) => s + r.count, 0)} refused`]])];
+    const pols = a.policies.map((k) => nodes.get(k)).filter(Boolean);
+    out.push(el('h3', null, 'Policies granting it'), nodeList(pols, (p) => nameOf(p.obj), (p) => nsOf(p.obj)));
+    out.push(el('h3', null, 'Agents naming it'), agentList(naming, (g) => `${nsOf(g.obj)} · ${stateOf(g.obj)}`));
+    return out;
+  },
+
   policy: (n) => {
     const o = n.obj;
     const naming = agents().filter((a) => !a.gone && nsOf(a.obj) === nsOf(o) && at(a.obj, 'spec.policyRef.name') === nameOf(o));
@@ -1461,8 +1596,9 @@ function select(key) {
       view.goal = mix(n.goal, a.goal, 0.5);
       view.dist = clamp(len(sub(n.goal, a.goal)) * 1.8, 12, 50);
     } else if (n.kind === 'gateway') {
-      view.goal = add(n.goal, [0, 1.2, 0]);
-      view.dist = 20;
+      // With its hosts, west of the column.
+      view.goal = add(n.goal, [-10, 0, 0]);
+      view.dist = 38;
     } else if (n.kind === 'spire' || n.kind === 'openbao') {
       // With the agents it holds something for.
       view.goal = mix(n.goal, fit.center, 0.45);
@@ -1493,14 +1629,26 @@ function pickAt(x, y) {
 }
 
 function bind() {
-  let drag = null;
+  let drag = null, box = null;
+  const marquee = document.createElement('div');
+  marquee.id = 'marquee';
+  marquee.hidden = true;
+  document.body.append(marquee);
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
     // A node in hand is let go by the window; Ctrl or Alt takes one (the layout, theatre.js).
     if (HAND.m) return;
     if (moveKey(e)) {
-      const n = nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
-      if (key && takeHold(e, key, n.pos, n.kind === 'agent' || n.kind === 'vm', (d) => { view.idle = 0; moveGroup(key, d); }, true)) view.touched = true;
+      const n = nodes.get(pickAt(e.clientX, e.clientY));
+      holdNode(e, n, !!n && (n.kind === 'agent' || n.kind === 'vm'));
+      return;
+    }
+    // Shift-Cmd-drag: a square that marks every group with a node inside it; a click clears.
+    if (e.shiftKey && e.metaKey && LAYOUT.editable) {
+      box = { x: e.clientX, y: e.clientY };
+      marquee.style.cssText = `left:${e.clientX}px;top:${e.clientY}px;width:0;height:0`;
+      marquee.hidden = false;
+      canvas.setPointerCapture(e.pointerId);
       return;
     }
     drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, target: view.target.slice(), pan: e.button === 2 || e.shiftKey || e.metaKey, moved: false };
@@ -1510,6 +1658,11 @@ function bind() {
   });
   canvas.addEventListener('pointermove', (e) => {
     if (HAND.m) return;
+    if (box) {
+      const x = Math.min(box.x, e.clientX), y = Math.min(box.y, e.clientY);
+      marquee.style.cssText = `left:${x}px;top:${y}px;width:${Math.abs(e.clientX - box.x)}px;height:${Math.abs(e.clientY - box.y)}px`;
+      return;
+    }
     if (!drag) {
       view.hover = pickAt(e.clientX, e.clientY);
       canvas.classList.toggle('pick', !!view.hover);
@@ -1530,6 +1683,25 @@ function bind() {
     }
   });
   const end = (e) => {
+    if (box) {
+      const r = canvas.getBoundingClientRect();
+      const x0 = Math.min(box.x, e.clientX) - r.left, x1 = Math.max(box.x, e.clientX) - r.left;
+      const y0 = Math.min(box.y, e.clientY) - r.top, y1 = Math.max(box.y, e.clientY) - r.top;
+      view.marked = new Set();
+      if (e.type === 'pointerup' && x1 - x0 > 4 && y1 - y0 > 4) {
+        for (const n of nodes.values()) {
+          if (n.gone || !n.pos || (n.kind === 'agent' && !matches(n))) continue;
+          const key = groupOf(n), c = toCam(n.pos);
+          if (!key || c[2] <= NEAR) continue;
+          const [px, py] = proj(c);
+          if (px >= x0 && px <= x1 && py >= y0 && py <= y1) view.marked.add(key);
+        }
+      }
+      box = null;
+      marquee.hidden = true;
+      dirty = true;
+      return;
+    }
     if (drag && !drag.moved && e.type === 'pointerup') select(pickAt(e.clientX, e.clientY));
     drag = null;
     canvas.classList.remove('dragging');
@@ -1548,7 +1720,7 @@ function bind() {
   }, { passive: false });
   document.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, select') || e.metaKey || e.ctrlKey) return;
-    if (e.key === 'Escape') { select(null); view.touched = false; dirty = true; }
+    if (e.key === 'Escape') { select(null); view.marked = new Set(); view.touched = false; dirty = true; }
     else if (e.key === '/') { e.preventDefault(); $('filter').focus(); }
   });
   $('insp-close').addEventListener('click', () => select(null));

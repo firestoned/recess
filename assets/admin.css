@@ -32,7 +32,9 @@
 .lbl.agent.gaps b { color: var(--seal); }
 .lbl.agent.refused b { color: var(--bad); }
 .lbl.agent.exited b { color: var(--ok); }
-.lbl.gateway b { color: var(--carrier); font-size: 11.5px; }
+.lbl.gateway b { color: var(--wire); font-size: 11.5px; }
+.lbl.gateway.busy b { color: var(--carrier); }
+.lbl.audience b { color: var(--ident); }
 .lbl.policy b { color: var(--policy); }
 /* A label centred under its icon (policies, providers). */
 .lbl.under { text-align: center; }
@@ -81,3 +83,7 @@
 
 /* The Output tab: notes from Recess and the broker, beside the workload's own lines. */
 .lines .note { color: var(--muted); font-style: italic; }
+/* Shift-Cmd-drag: the square, and the labels of every group it marked (moved together). */
+#marquee { position: fixed; z-index: 5; pointer-events: none; border: 1px dashed var(--wire); background: rgba(94, 231, 255, .07); }
+#marquee[hidden] { display: none; }
+.lbl.marked { outline: 1px dashed var(--wire); outline-offset: 2px; }
