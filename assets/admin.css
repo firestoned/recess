@@ -32,7 +32,9 @@
 .lbl.agent.gaps b { color: var(--seal); }
 .lbl.agent.refused b { color: var(--bad); }
 .lbl.agent.exited b { color: var(--ok); }
-.lbl.gateway b { color: var(--carrier); font-size: 11.5px; }
+.lbl.gateway b { color: var(--wire); font-size: 11.5px; }
+.lbl.gateway.busy b { color: var(--carrier); }
+.lbl.audience b { color: var(--ident); }
 .lbl.policy b { color: var(--policy); }
 /* A label centred under its icon (policies, providers). */
 .lbl.under { text-align: center; }

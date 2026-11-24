@@ -32,6 +32,7 @@ the places Recess stands things by default; [you can move them](#arranging-the-t
 | **Exit** | green | Where the run ends, with its exit code | AgentSandbox: the workload exits |
 
 Admin adds, around the same stations: a **plot** per namespace with a cage per agent, the
+**gateways** in one column inside a cyan circle with the **audiences** east of them, the
 **policies** in a row north-west of the gateways, a **rack** per VM pool, and the **providers**
 (the hosts the VMs run on) south of the racks.
 
@@ -55,7 +56,7 @@ Admin adds, around the same stations: a **plot** per namespace with a cage per a
     ![The Admin view of the demo's fleet](media/admin.png){ .shot }
 
     Every live agent: the base stations west, the namespaces' plots east of the API, the
-    gateways and policies north, the pools' racks and the providers south.
+    gateways, audiences and policies north, the pools' racks and the providers south.
 
 ## Arranging the theatre
 
