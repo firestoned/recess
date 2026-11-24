@@ -40,6 +40,10 @@ body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); }
   pointer-events: auto; cursor: pointer; padding: 2px 4px; margin: -2px -4px;
 }
 .lbl.sel { outline: 1px solid rgba(219, 231, 245, .5); }
+/* Marking several to move together (theatre.js): the Shift-Cmd square, and what is marked. */
+#marquee { position: fixed; z-index: 5; pointer-events: none; border: 1px dashed var(--wire); background: rgba(94, 231, 255, .07); }
+#marquee[hidden] { display: none; }
+.lbl.marked, .rcard.marked { outline: 1px dashed var(--wire); outline-offset: 2px; }
 .lbl.nopick { pointer-events: none; }
 .lbl b { display: block; color: var(--ink); font-weight: 600; }
 .lbl i { display: block; font-style: normal; text-transform: none; letter-spacing: .02em; color: var(--muted); font-weight: 400; }

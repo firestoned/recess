@@ -422,3 +422,60 @@ window.addEventListener('pointerup', (e) => {
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && HAND.m) { letGo(false); e.stopImmediatePropagation(); }
 }, true);
+
+// Marking several, to move them together. Shift-Cmd-drag draws a square that marks every
+// movable thing inside it; Cmd-click marks or unmarks one; a Shift-Cmd click, or Esc, clears.
+// A move (Ctrl- or Option-drag) of a marked thing carries every marked one by the same amount,
+// each kept under its own key. Only where moves are kept; elsewhere Cmd still pans. Each view
+// says what a key is (Admin: a group; AgentSandbox: a station) and shows what is marked.
+const MARK = { keys: new Set(), box: null, el: null };
+const markKey = (e) => e.metaKey && LAYOUT.editable;
+function markToggle(key) {
+  if (key && !MARK.keys.delete(key)) MARK.keys.add(key);
+}
+function markDraw(e) {
+  const b = MARK.box;
+  MARK.el.style.cssText = `left:${Math.min(b.x, e.clientX)}px;top:${Math.min(b.y, e.clientY)}px;width:${Math.abs(e.clientX - b.x)}px;height:${Math.abs(e.clientY - b.y)}px`;
+}
+// A Shift-Cmd press begins the square; true when it did.
+function markBegin(e) {
+  if (!e.shiftKey || !markKey(e)) return false;
+  if (!MARK.el) {
+    MARK.el = document.createElement('div');
+    MARK.el.id = 'marquee';
+    document.body.append(MARK.el);
+  }
+  MARK.box = { x: e.clientX, y: e.clientY };
+  markDraw(e);
+  MARK.el.hidden = false;
+  canvas.setPointerCapture(e.pointerId);
+  return true;
+}
+// While the square is up it follows the pointer; true while it is.
+function markMove(e) {
+  if (!MARK.box) return false;
+  markDraw(e);
+  return true;
+}
+// Let go of the square: what `keysIn(x0, y0, x1, y1)` finds inside it (canvas pixels) is the
+// marked set; a click with no square clears it. True when a square was up.
+function markEnd(e, keysIn) {
+  if (!MARK.box) return false;
+  const r = canvas.getBoundingClientRect(), b = MARK.box;
+  const x0 = Math.min(b.x, e.clientX) - r.left, x1 = Math.max(b.x, e.clientX) - r.left;
+  const y0 = Math.min(b.y, e.clientY) - r.top, y1 = Math.max(b.y, e.clientY) - r.top;
+  MARK.keys = new Set(e.type === 'pointerup' && x1 - x0 > 4 && y1 - y0 > 4 ? keysIn(x0, y0, x1, y1) : []);
+  MARK.box = null;
+  MARK.el.hidden = true;
+  return true;
+}
+// Whether the screen point (x, y) of a world point p lies in a square (canvas pixels).
+function inSquare(p, x0, y0, x1, y1) {
+  const c = toCam(p);
+  if (c[2] <= NEAR) return false;
+  const [x, y] = proj(c);
+  return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+}
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !HAND.m && MARK.keys.size) MARK.keys = new Set();
+});

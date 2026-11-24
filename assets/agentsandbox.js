@@ -243,7 +243,7 @@ function label(at, cls = '', node = null) {
   el.append(b, i);
   labelLayer.append(el);
   // A label is the easiest thing to hit: clicking it selects its node.
-  if (node) el.addEventListener('click', () => select('node', node));
+  if (node) el.addEventListener('click', (e) => { if (markKey(e)) { if (MOVABLE[node]) markToggle(node); } else select('node', node); });
   const l = { el, b, i, at, node, show: () => true, lit: () => false };
   LABELS.push(l);
   return l;
@@ -268,6 +268,7 @@ function placeLabels() {
     l.el.style.transform = `translate(${Math.round(lx)}px, ${Math.round(y - 10)}px)`;
     l.el.classList.toggle('lit', l.lit());
     l.el.classList.toggle('sel', !!l.node && view.sel?.kind === 'node' && view.sel.id === l.node);
+    l.el.classList.toggle('marked', !!l.node && MARK.keys.has(l.node));
     l.el.style.pointerEvents = D.act >= 3 ? '' : 'none';
   }
 }
@@ -1351,7 +1352,7 @@ const CARDS = {
   form: { node: 'form', px: 330, el: $('card-form'), c: ST.form.slice(), W: 4.8, H: 2.2, shown: false },
 };
 for (const card of Object.values(CARDS)) {
-  card.el.addEventListener('click', () => select('node', card.node));
+  card.el.addEventListener('click', (e) => { if (markKey(e)) markToggle(card.node); else select('node', card.node); });
 }
 
 // What a Ctrl-drag of each node moves (the layout, theatre.js): the station, and what stands
@@ -1370,6 +1371,17 @@ const MOVABLE = {
   end: () => [ST.end],
 };
 const moveNode = (id, d) => shiftPoints(MOVABLE[id](), d);
+// Take hold of node id: with every marked station when it is one of them (theatre.js), each
+// moved and kept as it goes; else itself, kept as it is let go.
+function holdNode(e, id) {
+  if (!MARK.keys.has(id)) return takeHold(e, id, nodeById(id).at(), false, (d) => moveNode(id, d));
+  const ids = [...MARK.keys].filter((k) => MOVABLE[k]);
+  // A point two stations share moves once (shiftPoints).
+  return takeHold(e, id, nodeById(id).at(), false, (d) => {
+    shiftPoints(ids.flatMap((k) => MOVABLE[k]()), d);
+    for (const k of ids) noteMove(k, d);
+  }, true);
+}
 
 // The rolodex: the front card (under the page's card), the cards fanned behind it on the
 // rod, the two wheels and the stand.
@@ -1425,6 +1437,7 @@ function placeCards() {
     el.style.opacity = String(clamp(fog(c[2]) * 1.25, 0.4, 1) * (key === 'you' ? clamp((fx.youCard - 0.4) / 0.6) : 1));
     el.style.pointerEvents = 'auto';
     el.classList.toggle('sel', view.sel?.kind === 'node' && view.sel.id === card.node);
+    el.classList.toggle('marked', MARK.keys.has(card.node));
   }
 }
 
@@ -2422,11 +2435,17 @@ function bindOrbit() {
       const hit = pick(e.clientX, e.clientY);
       if (hit?.kind === 'node' && MOVABLE[hit.id]) {
         if (navigable()) freeCamera();
-        takeHold(e, hit.id, nodeById(hit.id).at(), false, (d) => moveNode(hit.id, d));
+        holdNode(e, hit.id);
       }
       return;
     }
-    if (!navigable()) return;
+    // Shift-Cmd-drag: a square that marks every station in it (theatre.js), at any point of the run.
+    if (markBegin(e)) { if (navigable()) freeCamera(); return; }
+    if (!navigable()) {
+      // Before the camera is yours, a Cmd-click still marks.
+      if (markKey(e)) { const hit = pick(e.clientX, e.clientY); if (hit?.kind === 'node' && MOVABLE[hit.id]) markToggle(hit.id); }
+      return;
+    }
     // Pan: the right button, or the left with Shift or Cmd (Ctrl moves a node; on a Mac,
     // Ctrl-click is also the right button).
     const pan = e.button === 2 || e.shiftKey || e.metaKey;
@@ -2436,7 +2455,7 @@ function bindOrbit() {
     canvas.classList.add('dragging');
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (HAND.m) return;
+    if (HAND.m || markMove(e)) return;
     if (!drag) {
       // Hover: what a click would pick, or with Ctrl or Alt, what it would move.
       const movable = moveKey(e) ? pick(e.clientX, e.clientY) : null;
@@ -2455,7 +2474,13 @@ function bindOrbit() {
     }
   });
   const end = (e) => {
-    if (drag && !drag.moved && e.type === 'pointerup' && !drag.pan) {
+    const inside = (x0, y0, x1, y1) => NODES.filter((n) => MOVABLE[n.id] && n.show() && inSquare(n.at(), x0, y0, x1, y1)).map((n) => n.id);
+    if (markEnd(e, inside)) return;
+    // A Cmd-click (a pan that did not move) marks or unmarks a station.
+    if (drag && !drag.moved && e.type === 'pointerup' && markKey(e)) {
+      const hit = pick(e.clientX, e.clientY);
+      if (hit?.kind === 'node' && MOVABLE[hit.id]) markToggle(hit.id);
+    } else if (drag && !drag.moved && e.type === 'pointerup' && !drag.pan) {
       const hit = pick(e.clientX, e.clientY);
       if (hit) select(hit.kind, hit.id, { tab: hit.kind === 'node' && hit.id === 'cage' && model.lines.length ? 'output' : 'details' });
     }
