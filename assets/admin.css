@@ -83,3 +83,7 @@
 
 /* The Output tab: notes from Recess and the broker, beside the workload's own lines. */
 .lines .note { color: var(--muted); font-style: italic; }
+/* Shift-Cmd-drag: the square, and the labels of every group it marked (moved together). */
+#marquee { position: fixed; z-index: 5; pointer-events: none; border: 1px dashed var(--wire); background: rgba(94, 231, 255, .07); }
+#marquee[hidden] { display: none; }
+.lbl.marked { outline: 1px dashed var(--wire); outline-offset: 2px; }

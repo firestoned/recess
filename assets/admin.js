@@ -372,7 +372,7 @@ function ago(ts) {
 // namespaces, pools and their VMs. Nodes persist across changes and ease to where the layout
 // puts them; a gone one fades out.
 const nodes = new Map();
-const view = { target: [30, 0, 0], goal: null, yaw: -0.3, pitch: 0.62, dist: 55, sel: null, hover: null, idle: 0, filter: '', only: null, shift: 0, touched: false };
+const view = { target: [30, 0, 0], goal: null, yaw: -0.3, pitch: 0.62, dist: 55, sel: null, hover: null, marked: new Set(), idle: 0, filter: '', only: null, shift: 0, touched: false };
 const SP = 3.6; // between cages on a plot
 const CAGE_TOP = 0.85; // half a cage: where its lines leave from
 let fit = { center: [30, 0, 0], dist: 55 };
@@ -410,6 +410,23 @@ function moveGroup(key, d) {
   noteMove(key, d);
   layout();
   for (const n of nodes.values()) if (n.pos && groupOf(n) === key) n.pos = n.goal.slice();
+}
+// Several groups by the same d, with one layout: what a Shift-Cmd marquee marked.
+function moveGroups(keys, d) {
+  for (const key of keys) {
+    if (BASE_AT.has(key)) shiftPoints([BASE_AT.get(key)], d);
+    noteMove(key, d);
+  }
+  layout();
+  for (const n of nodes.values()) if (n.pos && keys.has(groupOf(n))) n.pos = n.goal.slice();
+}
+// Take hold of what node n stands in: every marked group when n is in one, else its own.
+function holdNode(e, n, flat) {
+  const key = n && groupOf(n);
+  if (!key) return;
+  const keys = view.marked.has(key) ? new Set(view.marked) : null;
+  const shift = keys ? (d) => { view.idle = 0; moveGroups(keys, d); } : (d) => { view.idle = 0; moveGroup(key, d); };
+  if (takeHold(e, key, n.pos, flat, shift, true)) view.touched = true;
 }
 
 // Boxes in rows: each item's width, wrapped at about the square root of the whole, rows centred
@@ -650,11 +667,10 @@ function label(n, cls) {
   el.addEventListener('click', (e) => { if (!moveKey(e)) select(n.key); });
   el.addEventListener('pointerdown', (e) => {
     if (HAND.m || !moveKey(e) || !n.pos) return;
-    const key = groupOf(n);
-    if (!key) return;
+    if (!groupOf(n)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (takeHold(e, key, n.pos, ['ns', 'yard', 'pool'].includes(n.kind), (d) => { view.idle = 0; moveGroup(key, d); }, true)) view.touched = true;
+    holdNode(e, n, ['ns', 'yard', 'pool'].includes(n.kind));
   });
   labelLayer.append(el);
   return { el, b, i, w: 0, title: null, detail: null, cls };
@@ -679,6 +695,8 @@ function placeLabel(l, p, show, alpha = 1, under = false) {
   l.el.style.opacity = String(clamp(fog(c[2]) * 1.2 * alpha, 0.25, 1));
   l.el.style.pointerEvents = '';
   l.el.classList.toggle('sel', view.sel === l.key);
+  const ln = view.marked.size && nodes.get(l.key);
+  l.el.classList.toggle('marked', !!ln && view.marked.has(groupOf(ln)));
   l.el.classList.toggle('under', under);
   l.shown = true;
 }
@@ -1611,14 +1629,26 @@ function pickAt(x, y) {
 }
 
 function bind() {
-  let drag = null;
+  let drag = null, box = null;
+  const marquee = document.createElement('div');
+  marquee.id = 'marquee';
+  marquee.hidden = true;
+  document.body.append(marquee);
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
     // A node in hand is let go by the window; Ctrl or Alt takes one (the layout, theatre.js).
     if (HAND.m) return;
     if (moveKey(e)) {
-      const n = nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
-      if (key && takeHold(e, key, n.pos, n.kind === 'agent' || n.kind === 'vm', (d) => { view.idle = 0; moveGroup(key, d); }, true)) view.touched = true;
+      const n = nodes.get(pickAt(e.clientX, e.clientY));
+      holdNode(e, n, !!n && (n.kind === 'agent' || n.kind === 'vm'));
+      return;
+    }
+    // Shift-Cmd-drag: a square that marks every group with a node inside it; a click clears.
+    if (e.shiftKey && e.metaKey && LAYOUT.editable) {
+      box = { x: e.clientX, y: e.clientY };
+      marquee.style.cssText = `left:${e.clientX}px;top:${e.clientY}px;width:0;height:0`;
+      marquee.hidden = false;
+      canvas.setPointerCapture(e.pointerId);
       return;
     }
     drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, target: view.target.slice(), pan: e.button === 2 || e.shiftKey || e.metaKey, moved: false };
@@ -1628,6 +1658,11 @@ function bind() {
   });
   canvas.addEventListener('pointermove', (e) => {
     if (HAND.m) return;
+    if (box) {
+      const x = Math.min(box.x, e.clientX), y = Math.min(box.y, e.clientY);
+      marquee.style.cssText = `left:${x}px;top:${y}px;width:${Math.abs(e.clientX - box.x)}px;height:${Math.abs(e.clientY - box.y)}px`;
+      return;
+    }
     if (!drag) {
       view.hover = pickAt(e.clientX, e.clientY);
       canvas.classList.toggle('pick', !!view.hover);
@@ -1648,6 +1683,25 @@ function bind() {
     }
   });
   const end = (e) => {
+    if (box) {
+      const r = canvas.getBoundingClientRect();
+      const x0 = Math.min(box.x, e.clientX) - r.left, x1 = Math.max(box.x, e.clientX) - r.left;
+      const y0 = Math.min(box.y, e.clientY) - r.top, y1 = Math.max(box.y, e.clientY) - r.top;
+      view.marked = new Set();
+      if (e.type === 'pointerup' && x1 - x0 > 4 && y1 - y0 > 4) {
+        for (const n of nodes.values()) {
+          if (n.gone || !n.pos || (n.kind === 'agent' && !matches(n))) continue;
+          const key = groupOf(n), c = toCam(n.pos);
+          if (!key || c[2] <= NEAR) continue;
+          const [px, py] = proj(c);
+          if (px >= x0 && px <= x1 && py >= y0 && py <= y1) view.marked.add(key);
+        }
+      }
+      box = null;
+      marquee.hidden = true;
+      dirty = true;
+      return;
+    }
     if (drag && !drag.moved && e.type === 'pointerup') select(pickAt(e.clientX, e.clientY));
     drag = null;
     canvas.classList.remove('dragging');
@@ -1666,7 +1720,7 @@ function bind() {
   }, { passive: false });
   document.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, select') || e.metaKey || e.ctrlKey) return;
-    if (e.key === 'Escape') { select(null); view.touched = false; dirty = true; }
+    if (e.key === 'Escape') { select(null); view.marked = new Set(); view.touched = false; dirty = true; }
     else if (e.key === '/') { e.preventDefault(); $('filter').focus(); }
   });
   $('insp-close').addEventListener('click', () => select(null));

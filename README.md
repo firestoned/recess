@@ -170,6 +170,8 @@ Both 3D views let you move what stands in them, and keep where you left it.
 | Esc, while carrying | put it back where it was before this move |
 | Ctrl-double-click | put it back where Recess stands it |
 | Shift, with any of these | swap the plane it moves in (below) |
+| Shift-Cmd-drag (Admin) | draw a square: every group with a node inside it is marked (dashed labels); a Shift-Cmd-click, or Esc, clears it |
+| Ctrl-drag or Option-drag on a marked node (Admin) | move every marked group together, by the same amount; Esc puts them all back |
 
 A station moves across the floor while the camera looks down on it, and in the upright plane
 facing you while the camera looks level (as on AgentSandbox's first view, with sheet 01 square
@@ -180,7 +182,8 @@ agent, or its plot's name, takes the plot with every agent on it; a VM, a pool's
 yard's name takes that namespace's yard of pools with every rack and VM in it (a rack never
 leaves its yard). The gateways move as one column with their circle, and the audiences as one
 block. Names are grabbed the same way as the things they name. Policies, providers and the
-base stations move one at a time. The camera stays put while you move something.
+base stations move one at a time, unless a Shift-Cmd square marked several: then a move on any
+marked one carries them all, each still saved under its own key. The camera stays put while you move something.
 
 Each move is saved as you let go, to `layout.json` beside `config.env`
 (`$XDG_CONFIG_HOME/recess/`, else `~/.config/recess/`): per view, an offset from where the code
