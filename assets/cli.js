@@ -152,7 +152,7 @@ async function showSignedInUser(near) {
 
 // A copy-to-clipboard button, for the output box of either page: the two-sheet icon, a check for a moment once copied. `text`
 // is called at click time, so a live stream copies what has arrived by then.
-function copyButton(text) {
+function copyButton(text, what = 'output') {
   const NS = 'http://www.w3.org/2000/svg';
   const icon = (paths) => {
     const svg = document.createElementNS(NS, 'svg');
@@ -171,8 +171,8 @@ function copyButton(text) {
   b.className = 'copy';
   b.append(icon(sheets));
   b.type = 'button';
-  b.title = 'Copy output';
-  b.setAttribute('aria-label', 'Copy output');
+  b.title = `Copy ${what}`;
+  b.setAttribute('aria-label', `Copy ${what}`);
   b.addEventListener('click', async (ev) => {
     ev.stopPropagation();
     const s = text();
@@ -194,10 +194,21 @@ function copyButton(text) {
     setTimeout(() => {
       b.replaceChildren(icon(sheets));
       b.classList.remove('done');
-      b.title = 'Copy output';
+      b.title = `Copy ${what}`;
     }, 1400);
   });
   return b;
+}
+
+// An object as YAML in a box with the copy button, as the raw (YAML) of both views' panels.
+function yamlBlock(obj) {
+  const text = toYaml(obj);
+  const box = document.createElement('div');
+  box.className = 'yamlwrap';
+  const pre = document.createElement('pre');
+  pre.textContent = text;
+  box.append(pre, copyButton(() => text, 'YAML'));
+  return box;
 }
 
 // YAML for reading, as kubectl prints objects: block mappings and sequences, two spaces a

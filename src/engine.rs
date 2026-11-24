@@ -812,6 +812,7 @@ impl Run {
         let mut round = 0u32;
         let mut sealed = false;
         let mut last_pool = Value::Null;
+        let mut policy = Value::Null;
         loop {
             let obj = lock(&c.latest).clone();
             let vm_name = obj
@@ -964,8 +965,35 @@ impl Run {
                     }
                 }
             };
+            // The policy the claim runs under and its ExposureCeiling (notaio), as the gateways
+            // are: slow to change, so every fifth round.
+            if round % 5 == 1 && !warned.contains("policy") {
+                let o = obj.as_ref();
+                let name = o.map_or("", |o| str_at(o, "/spec/policyRef/name"));
+                let uid = o.map_or("", |o| str_at(o, "/status/record/policyUid"));
+                if !name.is_empty() || !uid.is_empty() {
+                    match crate::kubeinfo::policy_and_ceiling(
+                        c.client.clone(),
+                        &c.sandbox_ns,
+                        name,
+                        uid,
+                    )
+                    .await
+                    {
+                        Ok(v) => policy = v,
+                        Err(e) => {
+                            warned.insert("policy");
+                            self.note(
+                                Step::Seal,
+                                format!("SandboxPolicy and ExposureCeiling not read: {e}"),
+                            );
+                        }
+                    }
+                }
+            }
             let payload = json!({
                 "spire": spire,
+                "policy": policy,
                 "secrets": map,
                 "kubeSecrets": secrets,
                 "brokerNamespace": c.kube.broker_namespace,

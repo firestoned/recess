@@ -207,6 +207,9 @@ ST.vault = add(ST.api, [5.6, -1.0, 3.6]);
 // The SandboxPolicy (notaio's signed bundle), above the road between the broker that reads it
 // and the API that holds the claim it governs.
 ST.policy = [15.5, 5.2, -9];
+// Its ExposureCeiling (notaio ADR-0007), the approved maximum it is linted against, above it.
+const CEILING_DY = 3.2;
+ST.ceiling = add(ST.policy, [0, CEILING_DY, 0]);
 // OpenBao, as far from the API as from SPIRE (whose PKI it is the upstream CA of), a little
 // west of the line between them so the entries edge passes it by.
 ST.bao = [15.3, 0.6, 1.9];
@@ -227,6 +230,13 @@ const SHAPES = {
     { pts: [[0.5, 1.05, 0], [0.5, 0.75, 0], [0.8, 0.75, 0]], edges: chain(3) },
     ...[0.55, 0.3, 0.05, -0.2].map((y, i) => ({ pts: [[-0.55, y, 0], [i === 3 ? 0.1 : 0.5, y, 0]], edges: [[0, 1]] })),
     moved(ring(0.26, 20, 'xy'), [0.38, -0.66, 0]), moved(ring(0.14, 12, 'xy'), [0.38, -0.66, 0]),
+  ),
+  // The ExposureCeiling: a lid, a bound pressed down on what is under it (the three ticks), and
+  // Security's approval as a seal on its top.
+  ceiling: merge(
+    { pts: [[-1.1, -0.35, 0], [-1.1, 0, 0], [1.1, 0, 0], [1.1, -0.35, 0]], edges: chain(4) },
+    ...[-0.55, 0, 0.55].map((x) => ({ pts: [[x, -0.05, 0], [x, -0.4, 0], [x - 0.12, -0.28, 0], [x + 0.12, -0.28, 0]], edges: [[0, 1], [1, 2], [1, 3]] })),
+    moved(ring(0.2, 16, 'xy'), [0, 0.32, 0]), moved(ring(0.1, 10, 'xy'), [0, 0.32, 0]),
   ),
   // The SPIRE server: a spire, its tip the CA, a ring at its waist.
   spire: (() => {
@@ -279,6 +289,50 @@ function drawBao(on, t) {
   const kf = Math.atan2(cam.pos[0] - ST.bao[0], cam.pos[2] - ST.bao[2]);
   draw(SHAPES.baoKey, add(ST.bao, [0, 1.55 + Math.sin(t * 1.1) * 0.12, 0]), C.seal, a, { ry: kf, rz: Math.sin(t * 0.7) * 0.15, glow: on, width: on ? 1.5 : 1 });
 }
+// A policy's ceiling at c (its policy below it): solid with its approval, dashed and red when
+// there is none, as notaio then refuses to publish the policy (Ready=False, NoApprovedCeiling).
+// The line between them is the bound.
+function drawCeiling(c, have, a, t, picked = false) {
+  const face = Math.atan2(cam.pos[0] - c[0], cam.pos[2] - c[2]);
+  const col = have ? C.policy : C.bad;
+  draw(SHAPES.ceiling, c, col, (have ? 0.9 : 0.6) * a, { ry: face, width: picked ? 1.8 : 1.2, glow: picked, dash: have ? null : [3, 4], scale: 1 + Math.sin(t * 0.8) * 0.02 });
+  lines([add(c, [0, -0.45, 0]), add(c, [0, -CEILING_DY + 1.25, 0])], [[0, 1]], col, (have ? 0.45 : 0.3) * a, 1, { dash: [2, 3], glow: false });
+}
+// An authorization checkpoint at p, facing the camera: a shield, and in it a tick, a cross, or
+// a keyhole while nothing is decided. `state` as AUTHZ_COLOR's keys.
+function drawShield(p, state, picked = false) {
+  const col = C[AUTHZ_COLOR[state]], f = Math.atan2(cam.pos[0] - p[0], cam.pos[2] - p[2]);
+  const al = state === 'pending' ? 0.55 : 1, sc = picked ? 1.25 : 1, ink = state === 'pending' ? C.ink : col;
+  draw(SHAPES.shield, p, ink, al, { ry: f, scale: sc, width: state === 'pending' ? 1 : 1.5 });
+  draw(state === 'ok' ? SHAPES.shieldOk : state === 'bad' ? SHAPES.shieldBad : SHAPES.shieldIdle, p, ink, al, { ry: f, scale: sc, width: 1.5 });
+}
+const AUTHZ_COLOR = { ok: 'ok', bad: 'bad', gaps: 'seal', pending: 'dim' };
+// Every check on a claim's way, from mediatore's code and ADRs: where it runs, what it
+// compares, and how a refusal shows. `codes` match the broker's error, so a refusal marks
+// the check that made it.
+const AUTHZ_CHECKS = [
+  { at: 'authz-broker', what: 'Your ID token, and the issuer\'s groups the broker requires', how: '403 forbidden', codes: ['forbidden', 'unauthorized'] },
+  { at: 'authz-broker', what: 'The namespace: your groups against sandboxes.namespaces (ADR-0046)', how: '403; the broker logs "namespace decision"', codes: ['namespace_required', 'namespace_forbidden'] },
+  { at: 'authz-broker', what: 'Each audience is usable in the namespace (ADR-0053)', how: '400 unknown_audience', codes: ['unknown_audience'] },
+  { at: 'authz-broker', what: 'The policy grants each audience and the ttl fits its lease (policy.audiences: enforce)', how: '400 policy_required, unknown_policy, ttl_exceeds_policy; 503 policy_not_synced', codes: ['policy_required', 'unknown_policy', 'ttl_exceeds_policy', 'policy_not_synced'] },
+  { at: 'authz-broker', what: 'The image is from a registry the pool reaches', how: '400 unreachable_registry', codes: ['unreachable_registry'] },
+  { at: 'authz-broker', what: 'The policy named resolves in the namespace\'s policy sources (ADR-0054, policy.egress: enforce; shadow only logs)', how: '400 policy_not_resolved', codes: ['policy_not_resolved'] },
+  { at: 'authz-api', what: 'Kubernetes admission (CEL): spec.subject.id is the caller, the spec is immutable, only the broker writes status', how: 'the API server refuses the write', codes: [] },
+  { at: 'authz-api', what: 'The reconciler (in the broker): a verified bundle for the policy, and the sandbox against it', how: 'status.reason policy_not_resolved; the PolicyConformant condition (shadow: gaps P001 to P012)', codes: [] },
+  { at: 'authz-gw', what: 'Each tunnel: the host against the claim\'s allowlist (its audiences\' endpoints, and the bundle\'s direct egress under ADR-0030 enforce)', how: 'the tunnel is refused; the gateway logs "tunnel" with verdict deny', codes: [] },
+  { at: 'authz-gw', what: 'Each credential the proxy asks to place: the policy admits the audience', how: 'the inject is refused; the broker logs "gateway credential refused"', codes: [], unseen: true },
+  { at: 'authz-broker', what: 'The guest\'s token requests, for as long as the claim lives', how: '403 claim revoked or expired', codes: [], unseen: true },
+];
+// Where the policy reaches, as both views draw it: the broker's reflector verifies its bundle
+// and the claim's admission decides by it; the reconciler holds the sandbox to it; the gateway's
+// authorizer asks the broker for the claim's allowlist, built from it (ADR-0030, ADR-0053).
+const AUTHZ_WHERE = { 'authz-broker': 'broker', 'authz-api': 'Kubernetes API', 'authz-gw': 'gateway' };
+const AUTHZ_SAYS = {
+  'authz-broker': 'The broker decides whether to take the claim at all, at POST /v1/claims, before anything is written: who you are, where, what for, under which policy. A refusal comes back as the broker\'s error, and nothing is created.',
+  'authz-api': 'Kubernetes admits the AgentSandbox the broker writes, and the broker\'s reconciler then holds it to the policy: a bundle it has verified, and the sandbox measured against it.',
+  'authz-gw': 'While the work runs, every tunnel out and every credential the proxy places is asked of the authorizer on the gateway, which asks the broker for the claim\'s egress. Decided per connection, never once for the run.',
+};
+
 // The fixed edges between stations, where both views draw them.
 const BASE_EDGES = {
   transit: () => [add(ST.broker, [0.8, -0.6, 0.8]), add(ST.bao, [-0.8, 0, 0])],

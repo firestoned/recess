@@ -83,3 +83,7 @@
 
 /* The Output tab: notes from Recess and the broker, beside the workload's own lines. */
 .lines .note { color: var(--muted); font-style: italic; }
+/* A checkpoint's checks, in order. */
+.checks { margin: 0; padding-left: 1.1em; }
+.checks li { margin: 0.4em 0; }
+.checks li span { color: var(--muted); }

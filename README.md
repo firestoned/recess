@@ -94,7 +94,9 @@ middle of a run reloads the page onto it; the choice is remembered, and `--view`
 (`RECESS_VIEW`; `--theme` and `RECESS_THEME` are its old names) sets the one a browser sees
 first. Both 3D views stand on one base theatre (`assets/theatre.js`): the renderer, the shapes,
 and the infrastructure in the same places, the issuer, the broker, the Kubernetes API and its
-Secrets vault, the SandboxPolicy, OpenBao and SPIRE. AgentSandbox shows the run as a wireframe
+Secrets vault, the SandboxPolicy under its ExposureCeiling, OpenBao and SPIRE, and the three
+places a claim is authorized (shields: the broker's admission, the API's admission and the
+reconciler, the gateway's authorizer). AgentSandbox shows the run as a wireframe
 journey. The request starts as a sheet of paper: sign in with the issuer first (the issuer
 stamps the sheet), then write the workload and press "Seal and send". The sheet crumples into
 an envelope with an open lock and travels to the broker (`POST /v1/claims`), on to the
@@ -116,7 +118,11 @@ The nodes: you, the OIDC issuer, the broker, the Kubernetes API, the Secrets vau
 sandbox VM with its guest agent, egress proxy and nsjail cage, each egress gateway, each
 audience the workload named, and the exit. The edges: every hop between them, including the
 jail to the proxy (loopback 3128, the only connection the jail may open), the proxy to a
-gateway (a CONNECT tunnel over mutual TLS, as the claim) and the gateway to the audience.
+gateway (a CONNECT tunnel over mutual TLS, as the claim) and the gateway to the audience. The
+policy's: its ExposureCeiling bounds it (notaio lints it against the ceiling before it signs),
+its bundle goes to the broker's admission, the reconciler holds the sandbox to it, and the
+broker serves the gateway's authorizer the claim's allowlist built from it. Every raw (YAML)
+block has a copy button.
 
 Every fact carries how it is known:
 
@@ -213,7 +219,12 @@ stand north of them as in AgentSandbox: one column of cyan diamonds in a cyan ci
 turning pink while it carries traffic and dashed while its VM is not ready. A running agent has
 one line to the gateway carrying its traffic, a packet on it at each new decision. East of the
 gateways stand the audiences, each one a policy grants or an agent names, with a line from the
-gateways to each one running agents reach. South of the fleet, each VirtualMachinePool is a rack with a
+gateways to each one running agents reach. Each SandboxPolicy has its ExposureCeiling above it
+(dashed red when there is none, so notaio does not publish it), a line from each published one
+to the broker's admission shield, and from each one agents run under to the reconciler's; the
+broker has a line to the gateways' authorizer, a shield under their circle. An agent is tied to
+its policy by the uid on its record, so a policy in another namespace (ADR-0054) still pairs.
+South of the fleet, each VirtualMachinePool is a rack with a
 box per member VM: claimed (an agent runs in it), warm, or still booting. SPIRE lights up with
 the claims' registration entries, OpenBao with the sealed Secrets. Click anything for its
 details: an agent shows its owner, policy, VM and pool, egress table, SPIRE entries and sealed
@@ -221,7 +232,8 @@ envelopes; a pool, its members and the agent on each.
 
 It is read-only, and one set of watches serves every viewer. The kubeconfig needs list and
 watch, across all namespaces, on `agentsandboxes.mediatore.io`, `virtualmachines.banlieue.io`,
-`virtualmachinepools.banlieue.io`, `sandboxpolicies.sandbox.firestoned.io` and
+`virtualmachinepools.banlieue.io`, `sandboxpolicies.sandbox.firestoned.io`,
+`exposureceilings.sandbox.firestoned.io` and
 `clusterstaticentries.spire.spiffe.io`; for the sealed envelopes, list and watch on Secrets in
 `--broker-namespace` (read as metadata only, never their data); and for egress before mediatore
 writes `status.egress` (ADR-0063), the broker pods' logs. Whatever it may not read is named in

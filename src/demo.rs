@@ -135,11 +135,30 @@ impl World {
         };
         r.data(
             Step::Seal,
-            json!({"spire": spire, "secrets": map, "kubeSecrets": kube, "brokerNamespace": "banlieue-system",
+            json!({"spire": spire, "policy": demo_policy(), "secrets": map, "kubeSecrets": kube, "brokerNamespace": "banlieue-system",
                 "memberVm": member, "gateways": self.gateways, "via": via,
                 "gatewayQuery": {"selector": "mediatore.io/role=gateway", "namespace": "", "prefix": "gateway-"}}),
         );
     }
+}
+
+/// The demo run's SandboxPolicy (`sandboxes/default`, the uid on its record) and its
+/// ExposureCeiling, as the engine reads them (`kubeinfo::policy_and_ceiling`).
+fn demo_policy() -> Value {
+    let audiences = json!([{"name": "anthropic", "endpoints": ["api.anthropic.com:443"]},
+        {"name": "github", "endpoints": ["api.github.com:443"]}]);
+    json!({
+        "object": {"apiVersion": "sandbox.firestoned.io/v1alpha2", "kind": "SandboxPolicy",
+            "metadata": {"name": "default", "namespace": "sandboxes", "uid": "5d0c1b2a-0000-4000-8000-00000000b001"},
+            "spec": {"profileRef": "Standard", "audiences": audiences, "lease": {"maxDurationSeconds": 3600}},
+            "status": {"bundleVersion": 7, "conditions": [{"type": "Ready", "status": "True", "reason": "Published"}]}},
+        "ceiling": {"apiVersion": "sandbox.firestoned.io/v1alpha2", "kind": "ExposureCeiling",
+            "metadata": {"name": "default", "namespace": "sandboxes"},
+            "spec": {"audiences": [{"name": "anthropic", "access": "Read", "maxTtlSeconds": 3600, "endpoints": ["api.anthropic.com:443"], "dataScope": "Internal"},
+                {"name": "github", "access": "Read", "maxTtlSeconds": 3600, "endpoints": ["api.github.com:443"], "dataScope": "Internal"}],
+                "egressHosts": [], "tools": [], "maxLeaseSeconds": 28800,
+                "approvals": [{"role": "Security", "reference": "https://example.com/approvals/1"}]}},
+    })
 }
 
 fn session_secret(state: &str, created: &str) -> Value {
