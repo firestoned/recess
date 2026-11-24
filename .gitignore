@@ -1,2 +1,5 @@
 /target
 /dist
+/docs/site
+/docs/.venv
+__pycache__/

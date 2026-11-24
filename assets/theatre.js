@@ -125,6 +125,23 @@ const chain = (n, closed = false) => {
 };
 function polyline(pts, color, alpha, width, opts) { lines(pts, chain(pts.length), color, alpha, width, opts); }
 
+// The frame loop: `step` draws one frame, and the next is asked for before it runs. An error
+// in a frame is reported (once while it repeats) and the loop goes on: one bad frame must not
+// freeze the view, nor stop the live updates the frames apply.
+function runFrames(step) {
+  let reported = '';
+  const tick = (now) => {
+    requestAnimationFrame(tick);
+    try {
+      step(now);
+    } catch (err) {
+      const what = String(err?.stack || err);
+      if (what !== reported) { reported = what; console.error('recess: a frame failed; the next one runs', err); }
+    }
+  };
+  return tick;
+}
+
 // ------------------------------------------------------------------------------ shapes (local)
 
 function box(w, h, d) {
@@ -300,11 +317,12 @@ const DESIGN = {
 
 // ------------------------------------------------------------------------------ the layout
 
-// Ctrl-drag moves a station: across the floor when the camera looks down on it, in the
-// upright plane facing the camera when it looks level (Shift swaps the two); Ctrl-double-click
-// puts it back. Each move is kept as an offset from where the code stands it, per view, and
-// saved by the server on your machine (layout.json beside config.env), so the next load stands
-// it there again. A shared Recess shows the layout as shipped and saves nothing.
+// Ctrl (or Alt, Option on a Mac) and press on a station takes hold of it: drag it and let go,
+// or click and click again where it goes; Esc puts it back. It moves across the floor when the
+// camera looks down on it, in the upright plane facing the camera when it looks level (Shift
+// swaps the two). Ctrl-double-click puts it back where the code stands it. Each move is kept
+// as an offset from that place, per view, and saved by the server on your machine (layout.json
+// beside config.env), so the next load stands it there again. A shared Recess shows the layout as shipped and saves nothing.
 const LAYOUT = { view: '', moved: {}, editable: false, timer: 0 };
 async function loadLayout(viewName) {
   LAYOUT.view = viewName;
@@ -353,6 +371,8 @@ function rayHit(x, y, p, upright) {
 // Whether a move goes in the upright plane: when the camera looks about level, unless Shift
 // (or the thing only stands on the floor).
 const moveUpright = (shift, flat = false) => !flat && (Math.abs(cam.f[1]) < 0.35) !== shift;
+// Whether this pointer event asks for a move.
+const moveKey = (e) => (e.ctrlKey || e.altKey) && LAYOUT.editable;
 // A move begun at (x, y) on a station at p; step() gives how far it went since the last step.
 function beginMove(x, y, p, upright) {
   const m = { upright, p: p.slice(), last: rayHit(x, y, p, upright) };
@@ -366,3 +386,39 @@ function beginMove(x, y, p, upright) {
   };
   return m;
 }
+
+// The station in hand. The window follows the pointer, not the canvas: macOS makes Ctrl-click a
+// right click, and a browser may then send the rest of the press elsewhere, or not at all; a
+// station taken up by a click follows the pointer with no button down, over the labels too.
+// `shift(d)` moves it; `records` when shift() notes the offset itself (noteMove).
+const HAND = { m: null, key: '', shift: null, records: false, total: [0, 0, 0], x: 0, y: 0, carry: false, dropped: 0 };
+function takeHold(e, key, p, flat, shift, records = false) {
+  const m = beginMove(e.clientX, e.clientY, p, moveUpright(e.shiftKey, flat));
+  if (!m) return false;
+  Object.assign(HAND, { m, key, shift, records, total: [0, 0, 0], x: e.clientX, y: e.clientY, carry: false });
+  canvas.classList.add('moving');
+  return true;
+}
+function letGo(keep) {
+  if (!HAND.m) return;
+  if (!keep) HAND.shift(mul(HAND.total, -1));
+  else if (!HAND.records && len(HAND.total) > 0) noteMove(HAND.key, HAND.total);
+  // A drop by a second click is not the double-click that puts a station back.
+  if (keep && len(HAND.total) > 0) HAND.dropped = performance.now();
+  HAND.m = null;
+  canvas.classList.remove('moving');
+}
+window.addEventListener('pointermove', (e) => {
+  if (!HAND.m) return;
+  const d = HAND.m.step(e.clientX, e.clientY);
+  if (len(d) > 0) { HAND.shift(d); HAND.total = add(HAND.total, d); }
+});
+window.addEventListener('pointerup', (e) => {
+  if (!HAND.m) return;
+  // Let go after a drag; after a click, carry it to the next click.
+  if (HAND.carry || Math.hypot(e.clientX - HAND.x, e.clientY - HAND.y) > 4) letGo(true);
+  else HAND.carry = true;
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && HAND.m) { letGo(false); e.stopImmediatePropagation(); }
+}, true);

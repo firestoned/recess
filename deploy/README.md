@@ -93,6 +93,9 @@ filesystem.
 
 Sessions live in memory: a restart signs everyone out, and the Deployment has one replica.
 
+The 3D views show the layout as shipped. Ctrl-drag, which moves a station and saves the layout
+on your own machine, is off here: nothing is written, so the root filesystem stays read-only.
+
 ## On your own machine
 
 Without `--oidc-issuer`, nothing changes. Recess listens on loopback only, the printed link

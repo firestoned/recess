@@ -1224,7 +1224,6 @@ function frame(now) {
   updateCards();
   placeLabels();
   placeCards();
-  requestAnimationFrame(frame);
 }
 
 // While the login is under way, the request goes to the issuer and comes back, on a loop.
@@ -2416,14 +2415,14 @@ function bindOrbit() {
   let drag = null;
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
-    // Ctrl: move the node under the pointer (the layout), at any point of the run.
-    if (e.ctrlKey && LAYOUT.editable) {
+    // A node in hand is let go by the window (theatre.js); Ctrl or Alt takes one, at any
+    // point of the run, with the camera held still while it moves.
+    if (HAND.m) return;
+    if (moveKey(e)) {
       const hit = pick(e.clientX, e.clientY);
-      const m = hit?.kind === 'node' && MOVABLE[hit.id] && beginMove(e.clientX, e.clientY, nodeById(hit.id).at(), moveUpright(e.shiftKey));
-      if (m) {
-        drag = { move: m, id: hit.id, moved: false };
-        canvas.setPointerCapture(e.pointerId);
-        canvas.classList.add('moving');
+      if (hit?.kind === 'node' && MOVABLE[hit.id]) {
+        if (navigable()) freeCamera();
+        takeHold(e, hit.id, nodeById(hit.id).at(), false, (d) => moveNode(hit.id, d));
       }
       return;
     }
@@ -2437,17 +2436,13 @@ function bindOrbit() {
     canvas.classList.add('dragging');
   });
   canvas.addEventListener('pointermove', (e) => {
+    if (HAND.m) return;
     if (!drag) {
-      // Hover: what a click would pick, or with Ctrl, what a drag would move.
-      const movable = e.ctrlKey && LAYOUT.editable ? pick(e.clientX, e.clientY) : null;
+      // Hover: what a click would pick, or with Ctrl or Alt, what it would move.
+      const movable = moveKey(e) ? pick(e.clientX, e.clientY) : null;
       canvas.classList.toggle('movable', movable?.kind === 'node' && !!MOVABLE[movable.id]);
       view.hover = navigable() ? pick(e.clientX, e.clientY) : null;
       canvas.classList.toggle('pick', !!view.hover);
-      return;
-    }
-    if (drag.move) {
-      const d = drag.move.step(e.clientX, e.clientY);
-      if (len(d) > 0) { moveNode(drag.id, d); drag.total = add(drag.total || [0, 0, 0], d); drag.moved = true; }
       return;
     }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
@@ -2460,12 +2455,6 @@ function bindOrbit() {
     }
   });
   const end = (e) => {
-    if (drag?.move) {
-      if (drag.total) noteMove(drag.id, drag.total);
-      drag = null;
-      canvas.classList.remove('moving');
-      return;
-    }
     if (drag && !drag.moved && e.type === 'pointerup' && !drag.pan) {
       const hit = pick(e.clientX, e.clientY);
       if (hit) select(hit.kind, hit.id, { tab: hit.kind === 'node' && hit.id === 'cage' && model.lines.length ? 'output' : 'details' });
@@ -2483,7 +2472,8 @@ function bindOrbit() {
   }, { passive: false });
   canvas.addEventListener('dblclick', (e) => {
     // Ctrl-double-click: the node back where the code stands it.
-    if (e.ctrlKey && LAYOUT.editable) {
+    if (moveKey(e)) {
+      if (performance.now() - HAND.dropped < 700) return;
       const hit = pick(e.clientX, e.clientY);
       const o = hit?.kind === 'node' && LAYOUT.moved[hit.id];
       if (o) { const back = mul(o, -1); moveNode(hit.id, back); noteMove(hit.id, back); }
@@ -2573,7 +2563,8 @@ async function init() {
   } else {
     $('issuer').focus();
   }
-  requestAnimationFrame((t) => { last = t; frame(t); });
+  const tick = runFrames(frame);
+  requestAnimationFrame((t) => { last = t; tick(t); });
 }
 
 init().catch((err) => { $('cap-title').textContent = 'Could not reach the server'; $('cap-detail').textContent = err.message; });

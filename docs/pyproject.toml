@@ -1,0 +1,22 @@
+# Copyright (c) 2026 Erick Bourgeois, Recess
+# SPDX-License-Identifier: Apache-2.0
+
+[tool.poetry]
+name = "recess-docs"
+version = "0.1.0"
+description = "Documentation dependencies for Recess"
+authors = ["Erick Bourgeois <erick@jeb.ca>"]
+license = "Apache-2.0"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+# MkDocs 1.x: 2.0 breaks Material and its plugins.
+mkdocs = ">=1.6.0,<2.0"
+mkdocs-material = "^9.5.0"
+mkdocs-include-markdown-plugin = "^7.1.0"
+pymdown-extensions = ">=11.0.1,<13.0.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -34,6 +34,8 @@ Object.assign(SHAPES, {
   host: merge(ring(0.32, 20, 'xy'), octa(0.12)),
   pkt: octa(0.13),
   // A banlieue Provider: the host machine the VMs are scheduled on, a low wide slab.
+  // A VM on its provider's slab: a unit box, scaled to fit as many as it runs.
+  chip: box(1, 1, 1),
   provider: merge(box(5, 0.5, 2.6), bar([-2.2, 0.26, 1.31], [2.2, 0.26, 1.31]), bar([-2.2, 0.05, 1.31], [2.2, 0.05, 1.31]), bar([-2.2, -0.16, 1.31], [2.2, -0.16, 1.31])),
   // A pool member: a small server, its front rack lines.
   // Big enough to read from high up, with its rack lines and a power light.
@@ -48,6 +50,8 @@ const FLEET = { x0: 36, z0: -5 };
 const POLICY_SP = 13;
 const VSP = 2.8; // between members on a rack
 const RACK_PAD = 1.4; // the rack's margin round its members
+const YARD_PAD = 2.2; // a namespace's yard: its margin round its racks
+const YARD_FOOT = 2.8; // and the room under the last row for the racks' names
 
 // ------------------------------------------------------------------------------ the data
 
@@ -348,12 +352,14 @@ function node(key, kind) {
 const BASE = [['issuer', 'issuer', ST.issuer], ['broker', 'broker', ST.broker], ['api', 'api', ST.api], ['vault', 'vault', ST.vault], ['openbao', 'openbao', ST.bao], ['spire', 'spire', ST.spire]];
 const BASE_AT = new Map(BASE.map(([key, , p]) => [key, p]));
 // What a Ctrl-drag of a node moves (the layout, theatre.js): a base station itself; an agent,
-// its namespace's plot; a VM, its pool's rack; a gateway, a policy or a provider, itself.
+// its namespace's plot; a pool, or a VM in one, its namespace's yard, with every rack and VM
+// in it (a rack never leaves its yard); a gateway, a policy or a provider, itself.
 // Each is kept as an offset by that key; layout() adds it.
 function groupOf(n) {
   if (n.kind === 'agent') return `ns/${nsOf(n.obj)}`;
-  if (n.kind === 'vm') return n.pool || null;
-  return BASE_AT.has(n.key) || ['ns', 'pool', 'gateway', 'policy', 'provider'].includes(n.kind) ? n.key : null;
+  if (n.kind === 'vm') return n.pool ? `yard/${nsOf(S.pool.get(n.pool))}` : null;
+  if (n.kind === 'pool') return `yard/${nsOf(n.obj)}`;
+  return BASE_AT.has(n.key) || ['ns', 'yard', 'gateway', 'policy', 'provider'].includes(n.kind) ? n.key : null;
 }
 const offsetOf = (key) => LAYOUT.moved[key] || [0, 0, 0];
 // Move a group by d: a base station in place (its edges are drawn from it), the rest by
@@ -389,6 +395,24 @@ function rowsAt(items, cx, z, gap, rowGap) {
   return { end: z, width };
 }
 
+// The VMs a provider runs, in a steady order (gateways first, then by name), and where each
+// one's box stands on its slab (SHAPES.provider: 5 wide, 2.6 deep, its top at +0.25).
+function providerVms(n) {
+  const ks = index().vmsOnProvider.get(nameOf(n.obj)) || [];
+  return ks.slice().sort((a, b) => (isGateway(S.vm.get(b)) - isGateway(S.vm.get(a))) || a.localeCompare(b));
+}
+function chipGrid(n) {
+  const c = providerVms(n).length || 1;
+  const cols = clamp(Math.ceil(Math.sqrt(c * 2.2)), 1, 14), rows = Math.ceil(c / cols);
+  return { cols, rows, cell: Math.min(4.3 / cols, 2.1 / rows) };
+}
+const chipSize = (n) => Math.min(0.55, chipGrid(n).cell * 0.62);
+function chipAt(n, vk) {
+  const i = Math.max(0, providerVms(n).indexOf(vk)), g = chipGrid(n), s = chipSize(n);
+  const x = (i % g.cols - (g.cols - 1) / 2) * g.cell, z = (Math.floor(i / g.cols) - (g.rows - 1) / 2) * g.cell - 0.1;
+  return add(n.pos, [x, 0.25 + s / 2, z]);
+}
+
 function layout() {
   const seen = new Set();
   for (const [key, kind, p] of BASE) { node(key, kind).goal = p; seen.add(key); }
@@ -415,17 +439,38 @@ function layout() {
     const rows = Math.max(1, Math.ceil(ms.length / cols));
     return { key, pool: p, ms, cols, rows, x0: 0, z0: 0, w: cols * VSP + 2 * RACK_PAD, d: rows * VSP + 2 * RACK_PAD };
   });
-  // The fleet's width is its plots' or its racks', whichever is wider; both centred on it.
+  // The racks of each namespace stand together in a yard: laid out in rows inside it first,
+  // from (0, 0), then the yards in rows across the fleet as the plots are.
+  const byPoolNs = new Map();
+  for (const r of racks) {
+    const ns = nsOf(r.pool);
+    if (!byPoolNs.has(ns)) byPoolNs.set(ns, []);
+    byPoolNs.get(ns).push(r);
+  }
+  const yards = [...byPoolNs.keys()].sort().map((ns) => {
+    const rs = byPoolNs.get(ns);
+    rowsAt(rs, 0, 0, 6, 5);
+    const minX = Math.min(...rs.map((r) => r.x0)), maxX = Math.max(...rs.map((r) => r.x0 + r.w));
+    const maxZ = Math.max(...rs.map((r) => r.z0 + r.d));
+    // Each rack's place in its yard; the rack's own name goes under it, inside.
+    for (const r of rs) { r.dx = r.x0 - minX + YARD_PAD; r.dz = r.z0 + YARD_PAD; }
+    return { ns, rs, x0: 0, z0: 0, w: maxX - minX + 2 * YARD_PAD, d: maxZ + 2 * YARD_PAD + YARD_FOOT };
+  });
+  // The fleet's width is its plots' or its yards', whichever is wider; both centred on it.
   const probe = rowsAt(plots.map((p) => ({ ...p })), 0, 0, 4, 4.5);
-  const probeR = rowsAt(racks.map((r) => ({ ...r })), 0, 0, 6, 5);
+  const probeR = rowsAt(yards.map((y) => ({ ...y })), 0, 0, 6, 5);
   const fleetW = Math.max(14, probe.width, probeR.width);
   const cx = FLEET.x0 + fleetW / 2;
   const fleetEnd = rowsAt(plots, cx, FLEET.z0, 4, 4.5).end;
   const racksAt = (plots.length ? fleetEnd : FLEET.z0) + 3;
-  const racksEnd = rowsAt(racks, cx, racksAt, 6, 5).end;
-  // Plots and racks moved by hand stay on the floor.
+  const racksEnd = rowsAt(yards, cx, racksAt, 6, 5).end;
+  // Plots and yards moved by hand stay on the floor; the racks, and their VMs, with their yard.
   for (const p of plots) { const o = offsetOf(`ns/${p.ns}`); p.x0 += o[0]; p.z0 += o[2]; }
-  for (const r of racks) { const o = offsetOf(r.key); r.x0 += o[0]; r.z0 += o[2]; }
+  for (const y of yards) {
+    const o = offsetOf(`yard/${y.ns}`);
+    y.x0 += o[0]; y.z0 += o[2];
+    for (const r of y.rs) { r.x0 = y.x0 + r.dx; r.z0 = y.z0 + r.dz; }
+  }
   // The providers (the hosts the VMs are scheduled on), a row south of the racks.
   const provs = [...S.provider.keys()].sort();
   const pspan = Math.max(fleetW, (provs.length - 1) * 9);
@@ -448,6 +493,12 @@ function layout() {
       a.goal = [p.x0 + (i % p.cols + 0.5) * SP, 0, p.z0 + Math.floor(i / p.cols) * SP + SP / 2];
       seen.add(key);
     });
+  }
+  for (const y of yards) {
+    const key = `yard/${y.ns}`;
+    const n = node(key, 'yard');
+    n.info = y; n.goal = [y.x0 + y.w / 2, FLOOR_Y, y.z0 + y.d + 0.7];
+    seen.add(key);
   }
   for (const r of racks) {
     const n = node(r.key, 'pool');
@@ -536,7 +587,17 @@ function label(n, cls) {
   el.className = `lbl ${cls}`;
   const b = document.createElement('b'), i = document.createElement('i');
   el.append(b, i);
-  el.addEventListener('click', () => select(n.key));
+  // A click picks it; with Ctrl or Option, a press takes hold of what it names, as on the
+  // canvas: a namespace's plot with its agents, a yard (or a pool in it) with its racks and VMs.
+  el.addEventListener('click', (e) => { if (!moveKey(e)) select(n.key); });
+  el.addEventListener('pointerdown', (e) => {
+    if (HAND.m || !moveKey(e) || !n.pos) return;
+    const key = groupOf(n);
+    if (!key) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (takeHold(e, key, n.pos, ['ns', 'yard', 'pool'].includes(n.kind), (d) => { view.idle = 0; moveGroup(key, d); }, true)) view.touched = true;
+  });
   labelLayer.append(el);
   return { el, b, i, w: 0, title: null, detail: null, cls };
 }
@@ -637,6 +698,12 @@ function updateLabels() {
       const c = poolCounts(n.info);
       setLabel(n.label, nameOf(n.obj), [`${c.claimed} claimed`, `${c.warm} warm`, c.booting ? `${c.booting} booting` : '', c.off ? `${c.off} off` : ''].filter(Boolean).join(' · '));
       placeLabel(n.label, n.pos, !n.gone, n.alpha);
+    } else if (n.kind === 'yard') {
+      if (!n.label) n.label = label(n, 'yard');
+      n.label.key = n.key;
+      const nv = n.info.rs.reduce((c, r) => c + r.ms.length, 0);
+      setLabel(n.label, n.info.ns, `${n.info.rs.length} pool${n.info.rs.length === 1 ? '' : 's'} · ${nv} VM${nv === 1 ? '' : 's'}`);
+      placeLabel(n.label, n.pos, !n.gone, n.alpha);
     } else if (n.kind === 'provider') {
       if (!n.label) n.label = label(n, 'provider');
       n.label.key = n.key;
@@ -714,8 +781,12 @@ const floor = (() => {
 function frame(now) {
   const dt = Math.min(0.05, (now - (last || now)) / 1000);
   last = now; clock += dt;
-  if (inbox.length) { for (const m of inbox.splice(0)) apply(m); }
-  if (dirty) { dirty = false; layout(); notePackets(); paintBar(); }
+  // Each change on its own: one that fails is dropped alone, not with the rest of its batch.
+  for (const m of inbox.splice(0)) {
+    try { apply(m); } catch (err) { console.error('recess: a change from the server was not applied', m, err); }
+  }
+  // Cleared once the layout is done, so a layout that failed is tried again next frame.
+  if (dirty) { layout(); notePackets(); paintBar(); dirty = false; }
 
   // Nodes ease to their places; new ones rise in, gone ones fade and are dropped.
   const k = 1 - Math.exp(-dt * 4);
@@ -742,7 +813,6 @@ function frame(now) {
   updateLabels();
   flushOutput();
   if (stamp !== shownStamp && view.sel && clock - shownAt > 0.5) renderDetails();
-  requestAnimationFrame(frame);
 }
 
 // A raised arc from a to b, as points.
@@ -787,22 +857,35 @@ function drawScene(dt) {
     const lit = sel && sel.kind === 'agent' && nsOf(sel.obj) === p.ns;
     lines([[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]], chain(4, true), lit ? C.wire : C.muted, (lit ? 0.6 : 0.3) * n.alpha, 1);
   }
+  // The VM picked, itself or as the one an agent runs in.
+  const selVm = sel?.kind === 'agent' ? vmKeyOf(sel.obj) : sel?.kind === 'vm' ? sel.key : null;
   // The providers, and a line from each VM (pool member or gateway) to the one it runs on.
   for (const n of nodes.values()) if (n.kind === 'provider' && n.pos) {
     const on = sel && (sel.key === n.key || ((sel.kind === 'vm' || sel.kind === 'gateway') && at(sel.kind === 'vm' ? sel.obj : sel.obj, 'status.scheduled.providerName') === nameOf(n.obj)));
     const ready = condOf(n.obj, 'Ready')?.status !== 'False';
     draw(SHAPES.provider, n.pos, ready ? C.ident : C.bad, (on ? 1 : 0.7) * n.alpha, { width: on ? 1.6 : 1, glow: on });
+    // A small box on the slab for each VM it runs.
+    for (const vk of providerVms(n)) {
+      const lit = on || selVm === vk || view.hover === vk || sel?.key === vk;
+      draw(SHAPES.chip, chipAt(n, vk), C.ident, (lit ? 1 : 0.65) * n.alpha, { scale: chipSize(n), width: lit ? 1.4 : 1, glow: lit });
+    }
   }
   for (const n of nodes.values()) if ((n.kind === 'vm' || n.kind === 'gateway') && n.pos && n.obj) {
     const pk = index().providerByName.get(at(n.obj, 'status.scheduled.providerName'));
     const pn = pk && nodes.get(pk);
     if (!pn?.pos) continue;
-    const pts = arcPts(add(n.pos, [0, -0.3, 0]), add(pn.pos, [0, 0.3, 0]), 1, 10);
+    // To its own box on the provider's slab.
+    const pts = arcPts(add(n.pos, [0, -0.3, 0]), chipAt(pn, n.key), 1, 10);
     if (sel && (sel.key === n.key || sel.key === pk)) lines(pts, chain(pts.length), C.ident, 0.7, 1.2);
     else batched(C.ident, pts, [1, 4]);
   }
-  // The pools: a rack each, its members on it.
-  const selVm = sel?.kind === 'agent' ? vmKeyOf(sel.obj) : sel?.kind === 'vm' ? sel.key : null;
+  // The pools: a rack each, its members on it, in its namespace's yard.
+  const selPool = sel?.kind === 'pool' ? sel.key : selVm ? nodes.get(selVm)?.pool : null;
+  for (const n of nodes.values()) if (n.kind === 'yard' && n.pos) {
+    const y = n.info, f = FLOOR_Y - 0.02, x0 = y.x0, x1 = y.x0 + y.w, z0 = y.z0, z1 = y.z0 + y.d;
+    const lit = sel && (sel.key === n.key || y.rs.some((r) => r.key === selPool));
+    lines([[x0, f, z0], [x1, f, z0], [x1, f, z1], [x0, f, z1]], chain(4, true), lit ? C.ok : C.muted, (lit ? 0.55 : 0.28) * n.alpha, lit ? 1.3 : 1, { dash: [6, 4] });
+  }
   for (const n of nodes.values()) if (n.kind === 'pool' && n.pos) {
     const r = n.info, y = FLOOR_Y, x0 = r.x0, x1 = r.x0 + r.w, z0 = r.z0, z1 = r.z0 + r.d;
     const lit = sel && (sel.key === n.key || (selVm && nodes.get(selVm)?.pool === n.key));
@@ -1206,6 +1289,13 @@ const PANELS = {
       raw('raw (YAML)', o)];
   },
 
+  yard: (n) => {
+    const y = n.info;
+    return [el('div', 'kicker', 'namespace · VirtualMachinePools'), el('h2', null, y.ns),
+      el('p', 'lede', 'The pools in this namespace, each a rack of its member VMs.'),
+      nodeList(y.rs.map((r) => nodes.get(r.key)).filter(Boolean), (p) => nameOf(p.obj), (p) => { const c = poolCounts(p.info); return `${p.info.ms.length} VMs · ${c.claimed} claimed · ${c.warm} warm`; })];
+  },
+
   ns: (n) => {
     const p = n.info;
     const list = p.list.map(([key]) => nodes.get(key)).filter(Boolean);
@@ -1377,7 +1467,7 @@ function select(key) {
       // With the agents it holds something for.
       view.goal = mix(n.goal, fit.center, 0.45);
       view.dist = fit.dist * 0.75;
-    } else if (n.kind === 'pool') {
+    } else if (n.kind === 'pool' || n.kind === 'yard') {
       view.goal = [n.info.x0 + n.info.w / 2, 0, n.info.z0 + n.info.d / 2 - 3];
       view.dist = Math.max(18, n.info.w * 1.6);
     } else {
@@ -1391,7 +1481,7 @@ function select(key) {
 function pickAt(x, y) {
   let best = null, bd = 30;
   for (const n of nodes.values()) {
-    if (n.gone || !n.pos || n.kind === 'ns' || n.kind === 'pool') continue;
+    if (n.gone || !n.pos || n.kind === 'ns' || n.kind === 'yard' || n.kind === 'pool') continue;
     if (n.kind === 'agent' && !matches(n)) continue;
     const c = toCam(n.pos);
     if (c[2] <= NEAR) continue;
@@ -1406,17 +1496,11 @@ function bind() {
   let drag = null;
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
-    // Ctrl: move what is under the pointer (the layout, theatre.js).
-    if (e.ctrlKey && LAYOUT.editable) {
+    // A node in hand is let go by the window; Ctrl or Alt takes one (the layout, theatre.js).
+    if (HAND.m) return;
+    if (moveKey(e)) {
       const n = nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
-      const flat = !n || n.kind === 'agent' || n.kind === 'vm';
-      const m = key && beginMove(e.clientX, e.clientY, n.pos, moveUpright(e.shiftKey, flat));
-      if (m) {
-        drag = { move: m, key, moved: false };
-        view.touched = true;
-        canvas.setPointerCapture(e.pointerId);
-        canvas.classList.add('moving');
-      }
+      if (key && takeHold(e, key, n.pos, n.kind === 'agent' || n.kind === 'vm', (d) => { view.idle = 0; moveGroup(key, d); }, true)) view.touched = true;
       return;
     }
     drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, target: view.target.slice(), pan: e.button === 2 || e.shiftKey || e.metaKey, moved: false };
@@ -1425,15 +1509,11 @@ function bind() {
     view.idle = 0;
   });
   canvas.addEventListener('pointermove', (e) => {
+    if (HAND.m) return;
     if (!drag) {
       view.hover = pickAt(e.clientX, e.clientY);
       canvas.classList.toggle('pick', !!view.hover);
-      canvas.classList.toggle('movable', e.ctrlKey && LAYOUT.editable && !!view.hover && !!groupOf(nodes.get(view.hover)));
-      return;
-    }
-    if (drag.move) {
-      const d = drag.move.step(e.clientX, e.clientY);
-      if (len(d) > 0) { moveGroup(drag.key, d); drag.moved = true; }
+      canvas.classList.toggle('movable', moveKey(e) && !!view.hover && !!groupOf(nodes.get(view.hover)));
       return;
     }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
@@ -1450,8 +1530,7 @@ function bind() {
     }
   });
   const end = (e) => {
-    if (drag?.move) canvas.classList.remove('moving');
-    else if (drag && !drag.moved && e.type === 'pointerup') select(pickAt(e.clientX, e.clientY));
+    if (drag && !drag.moved && e.type === 'pointerup') select(pickAt(e.clientX, e.clientY));
     drag = null;
     canvas.classList.remove('dragging');
   };
@@ -1459,7 +1538,7 @@ function bind() {
   canvas.addEventListener('pointercancel', end);
   // Ctrl-double-click: back where the layout stands it.
   canvas.addEventListener('dblclick', (e) => {
-    const n = e.ctrlKey && LAYOUT.editable && nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
+    const n = moveKey(e) && performance.now() - HAND.dropped > 700 && nodes.get(pickAt(e.clientX, e.clientY)), key = n && groupOf(n);
     if (key && LAYOUT.moved[key]) moveGroup(key, mul(LAYOUT.moved[key], -1));
   });
   canvas.addEventListener('wheel', (e) => {
@@ -1499,4 +1578,4 @@ loadLayout('admin').then((moved) => {
 });
 connect();
 paintBar();
-requestAnimationFrame(frame);
+requestAnimationFrame(runFrames(frame));

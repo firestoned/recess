@@ -10,7 +10,7 @@ OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 ARCH := $(shell uname -m | sed -e 's/aarch64/arm64/' -e 's/amd64/x86_64/')
 DIST := dist/recess-$(OS)-$(ARCH)
 
-.PHONY: help fmt fmt-check lint test deny audit check build dist demo record image
+.PHONY: help fmt fmt-check lint test deny audit check build dist demo record image docs docs-serve docs-media docs-clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -53,6 +53,18 @@ demo: ## The scripted run in a browser, no cluster
 
 record: ## Record the AgentSandbox demo into docs/media (GIF and MP4): needs node, ffmpeg, Chrome
 	scripts/record-agentsandbox.sh
+
+docs: ## Build the documentation site into docs/site (MkDocs, strict): needs poetry
+	cd docs && poetry install --no-interaction --quiet && poetry run mkdocs build
+
+docs-serve: ## Serve the documentation with live reload at http://127.0.0.1:8000
+	cd docs && poetry install --no-interaction --quiet && poetry run mkdocs serve --livereload
+
+docs-media: ## Redraw the docs' layout map and retake their screenshots from the demo: needs node, Chrome
+	scripts/docs-media.sh
+
+docs-clean: ## Remove the built site and the docs' virtualenv
+	rm -rf docs/site docs/.venv
 
 IMAGE ?= recess:dev
 

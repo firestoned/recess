@@ -154,16 +154,41 @@ gateway is a candidate, dashed, and the details say why; the demo's scripted wor
 | arrow keys | orbit |
 | `[` and `]` | the previous or next node |
 | Esc, "Follow live" | hand the camera back to the run |
-| Ctrl-drag | move a station: across the floor when looking down, upright when looking level (Shift swaps) |
-| Ctrl-double-click | put a moved station back |
-
-Moves are kept per view in `layout.json` beside `config.env` (`~/.config/recess/`), as offsets
-from where the code stands each thing, and read back on the next load. In the Admin view an
-agent moves its namespace's plot and a VM its pool's rack. A shared Recess (behind Dex) keeps
-the layout as shipped and saves nothing.
+| Ctrl-drag, Option-drag, Ctrl-click then click | move a station ([Arranging the theatre](#arranging-the-theatre)) |
 
 The renderer is a small one on a 2D canvas, with no 3D library and nothing loaded from
 elsewhere; `prefers-reduced-motion` shortens every animation.
+
+### Arranging the theatre
+
+Both 3D views let you move what stands in them, and keep where you left it.
+
+| Input | Does |
+|---|---|
+| Ctrl-drag or Option-drag | move the station under the pointer, and let go where it goes |
+| Ctrl-click, then click | take it up, and drop it with the next click: it follows the pointer in between, no button held |
+| Esc, while carrying | put it back where it was before this move |
+| Ctrl-double-click | put it back where Recess stands it |
+| Shift, with any of these | swap the plane it moves in (below) |
+
+A station moves across the floor while the camera looks down on it, and in the upright plane
+facing you while the camera looks level (as on AgentSandbox's first view, with sheet 01 square
+to you): that is how the OIDC tower goes up or down beside the login form. Its label and its
+edges go with it, and so does whatever stands on it: the VM takes its guest agent, egress
+proxy, gateways and audiences; your card takes its rolodex. In Admin, a namespace moves whole: an
+agent, or its plot's name, takes the plot with every agent on it; a VM, a pool's name, or the
+yard's name takes that namespace's yard of pools with every rack and VM in it (a rack never
+leaves its yard). Names are grabbed the same way as the things they name. Gateways, policies,
+providers and the base stations move one at a time. The camera stays put while you move something.
+
+Each move is saved as you let go, to `layout.json` beside `config.env`
+(`$XDG_CONFIG_HOME/recess/`, else `~/.config/recess/`): per view, an offset from where the code
+stands each thing, by node (`spire`, `issuer`, `gw/gateway-01`, `ns/team-a`, ...). The next
+load, of either view, stands everything there again. Delete the file, or a view's entry in it,
+to start over. A station the code later moves keeps your offset from its new place.
+
+A shared Recess ([In a cluster](#in-a-cluster)) shows the layout as shipped and saves nothing;
+the "ctrl- or ⌥-drag to move" hint in the caption shows only where moves are kept.
 
 ### Recording it
 
@@ -192,6 +217,9 @@ watch, across all namespaces, on `agentsandboxes.mediatore.io`, `virtualmachines
 `--broker-namespace` (read as metadata only, never their data); and for egress before mediatore
 writes `status.egress` (ADR-0063), the broker pods' logs. Whatever it may not read is named in
 the caption, and the rest still shows.
+
+Its stations can be moved and the layout kept, as in AgentSandbox: see
+[Arranging the theatre](#arranging-the-theatre).
 
 Each agent, VM, gateway and provider's details end with **Cross-references**: every link to
 another object, the status field it was read from, and whether that object still exists; see
@@ -304,11 +332,16 @@ make check   # fmt, clippy (pedantic, -D warnings), tests, cargo-deny
 make dist    # release binary into dist/recess-<os>-<arch>, with its SHA-256
 make demo    # the scripted run in a browser
 make image   # the distroless container image (podman), recess:dev
+make docs    # the documentation site into docs/site (MkDocs, strict); docs-serve serves it
+make docs-media  # redraw the docs' layout map, retake their screenshots from the demo
 ```
 
 CI (`.github/workflows/build.yaml`) runs the same targets: SPDX headers, signed commits, fmt,
 clippy, tests, cargo-audit, cargo-deny, then the release binary for Linux x86_64 and macOS
-arm64, attached to a published release.
+arm64, attached to a published release. `.github/workflows/docs.yaml` builds the site on each
+pull request and publishes it to GitHub Pages, <https://firestoned.github.io/recess/>, on each
+merge to main. Its pages are this README and the other documents here, pulled in whole, so
+there is one copy of each.
 
 ## What it never does
 
