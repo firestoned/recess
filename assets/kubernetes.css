@@ -39,3 +39,15 @@
 .details .layer-head .pick { font: 600 11px var(--mono); }
 .details .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .details .chip { font: 10px var(--mono); padding: 1px 6px; border: 1px solid var(--faint); border-radius: 2px; color: var(--muted); }
+
+/* The vaults: amber when its Secrets are readable, red when locked; a box's state likewise. */
+.lbl.vault b { color: var(--wire); font-size: 10px; letter-spacing: .16em; }
+.lbl.vault.readable b { color: var(--seal); }
+.lbl.vault.locked b { color: var(--bad); }
+.lbl.box b { font-size: 9px; color: var(--wire); }
+.lbl.box.readable b { color: var(--seal); }
+.lbl.box.locked b { color: var(--bad); }
+.lbl.box.open b { color: var(--ink); }
+.details .keys td:first-child { color: var(--ink); }
+.details .keys button { padding: 2px 8px; }
+.details pre.secret-value { color: var(--seal); max-height: 16em; overflow: auto; }

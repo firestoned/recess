@@ -285,6 +285,8 @@ pub async fn serve(
         .route("/api/admin", get(admin_events))
         .route("/api/admin/output", get(admin_output))
         .route("/api/kubernetes", get(kubernetes_events))
+        .route("/api/kubernetes/access", get(kubernetes_access))
+        .route("/api/kubernetes/secret", get(kubernetes_secret))
         .route("/auth/logout", post(sign_out))
         .route_layer(middleware::from_fn_with_state(app.clone(), require_access));
     let api = ASSETS.iter().fold(api, |r, &(path, ct, body)| {
@@ -673,6 +675,112 @@ async fn kubernetes_events(
         }
     }
     fleet_stream(&app, fleet)
+}
+
+/// The client a Kubernetes read is made with: the signed-in person's own when shared, else
+/// the kubeconfig's.
+async fn kube_for(app: &App, user: Option<&User>) -> Result<kube::Client, String> {
+    if let Some(u) = user {
+        return Ok(u.client.clone());
+    }
+    app.kube_client
+        .get_or_try_init(|| crate::engine::kube_client(&app.kube))
+        .await
+        .cloned()
+        .map_err(|e| format!("kube: {e:#}"))
+}
+
+/// JSON that no cache keeps: a Secret's keys or value.
+fn no_store(v: serde_json::Value) -> Response {
+    let mut r = Json(v).into_response();
+    r.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
+    );
+    r
+}
+
+/// A key in a Secret's data: what may be asked for, and nothing else.
+fn secret_key(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 253
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+}
+
+#[derive(Deserialize)]
+struct AccessQuery {
+    ns: String,
+}
+
+/// `/api/kubernetes/access?ns=`: whether the viewer may read Secrets in the namespace, as the
+/// API server answers a SelfSubjectAccessReview for them: the vault's drawers, locked or not.
+async fn kubernetes_access(
+    State(app): State<Shared>,
+    user: Option<Extension<Arc<User>>>,
+    Query(q): Query<AccessQuery>,
+) -> Response {
+    if !kube_name(&q.ns) {
+        return err(StatusCode::BAD_REQUEST, "ns is a Kubernetes name");
+    }
+    if app.demo {
+        return Json(json!({"ns": q.ns, "read": crate::cluster::demo_can_read(&q.ns)}))
+            .into_response();
+    }
+    let client = match kube_for(&app, user.as_ref().map(|u| &*u.0)).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::BAD_GATEWAY, e),
+    };
+    match crate::cluster::can_read_secrets(&client, &q.ns).await {
+        Ok(read) => Json(json!({"ns": q.ns, "read": read})).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, format!("access review: {e}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct SecretQuery {
+    ns: String,
+    name: String,
+    key: Option<String>,
+}
+
+/// `/api/kubernetes/secret?ns=&name=[&key=]`: a drawer pulled open. Without `key`, the Secret's
+/// type and its keys with their sizes; with `key`, that one value. Read with the viewer's own
+/// credentials each time, so their RBAC decides; never cached, here or in the browser.
+async fn kubernetes_secret(
+    State(app): State<Shared>,
+    user: Option<Extension<Arc<User>>>,
+    Query(q): Query<SecretQuery>,
+) -> Response {
+    if !kube_name(&q.ns) || !kube_name(&q.name) {
+        return err(StatusCode::BAD_REQUEST, "ns and name are Kubernetes names");
+    }
+    if q.key.as_deref().is_some_and(|k| !secret_key(k)) {
+        return err(StatusCode::BAD_REQUEST, "key is a Secret data key");
+    }
+    let got = if app.demo {
+        crate::cluster::demo_secret(&q.ns, &q.name, q.key.as_deref())
+    } else {
+        let client = match kube_for(&app, user.as_ref().map(|u| &*u.0)).await {
+            Ok(c) => c,
+            Err(e) => return err(StatusCode::BAD_GATEWAY, e),
+        };
+        crate::cluster::open_secret(&client, &q.ns, &q.name, q.key.as_deref()).await
+    };
+    match got {
+        Ok(v) => no_store(v),
+        Err(r) => {
+            let mut resp = err(
+                StatusCode::from_u16(r.code).unwrap_or(StatusCode::BAD_GATEWAY),
+                r.message,
+            );
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store, private"),
+            );
+            resp
+        }
+    }
 }
 
 /// A picture's stream: the whole of it, then each change; a viewer that falls behind gets the
@@ -1296,6 +1404,16 @@ mod tests {
         assert!(kube_name("team-a"));
         for bad in ["", "../claims", "a/b", "A", "x?y", "a b", &"a".repeat(254)] {
             assert!(!kube_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_data_key_reaches_a_secret_read() {
+        for ok in ["tls.crt", ".dockerconfigjson", "DB_PASSWORD", "a-b_c.d"] {
+            assert!(secret_key(ok), "{ok:?}");
+        }
+        for bad in ["", "a/b", "a b", "x?y", "%2e", &"a".repeat(254)] {
+            assert!(!secret_key(bad), "{bad:?}");
         }
     }
 
