@@ -210,6 +210,9 @@ pub async fn serve(
         // Never any access of its own: every read is the signed-in person's.
         signin::holds_no_access(std::path::Path::new(signin::SERVICE_ACCOUNT_TOKEN))?;
         let public = signin::public_url(&sign_in.public_url)?;
+        if let Some(w) = signin::port_mismatch(&public, listen) {
+            eprintln!("warning: {w}");
+        }
         let provider = signin::Provider::discover(sign_in).await?;
         // Only the cluster's address and CA are kept from this: its credentials are dropped.
         let base = if demo {

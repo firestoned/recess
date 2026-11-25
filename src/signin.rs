@@ -101,13 +101,7 @@ impl Settings {
 pub fn public_url(raw: &str) -> anyhow::Result<String> {
     let u = reqwest::Url::parse(raw.trim())
         .map_err(|e| anyhow::anyhow!("--public-url {raw:?} is not a URL: {e}"))?;
-    let host = u.host_str().unwrap_or_default();
-    let local = host == "localhost"
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback());
+    let local = is_local(u.host_str().unwrap_or_default());
     anyhow::ensure!(
         u.scheme() == "https" || (u.scheme() == "http" && local),
         "--public-url {raw}: https, or http on localhost only (the session cookie must not cross a network in clear)"
@@ -117,6 +111,35 @@ pub fn public_url(raw: &str) -> anyhow::Result<String> {
         "--public-url {raw}: the server's root, with no path, query or fragment"
     );
     Ok(u.as_str().trim_end_matches('/').to_owned())
+}
+
+/// This machine: `localhost` or a loopback address.
+fn is_local(host: &str) -> bool {
+    host == "localhost"
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// A public URL on this machine whose port is not the one the server listens on: Dex would
+/// send the browser back to nothing. Only a warning, since a port-forward can stand between.
+#[must_use]
+pub fn port_mismatch(public: &str, listen: std::net::SocketAddr) -> Option<String> {
+    let u = reqwest::Url::parse(public).ok()?;
+    if !is_local(u.host_str()?) {
+        return None;
+    }
+    let port = u.port_or_known_default()?;
+    (port != listen.port()).then(|| {
+        format!(
+            "--public-url {public} is port {port}, but this server listens on {listen}: unless \
+             something forwards {port} here, Dex will send you back to nothing (try \
+             --public-url http://localhost:{})",
+            listen.port()
+        )
+    })
 }
 
 /// The `Host` a browser sends for `public` (with its port when it is not the default).
@@ -844,6 +867,13 @@ mod tests {
             "https://recess.example.com"
         );
         assert!(public_url("http://localhost:7480").is_ok());
+        let listen: std::net::SocketAddr = "127.0.0.1:7480".parse().unwrap();
+        assert!(
+            port_mismatch("http://localhost", listen).is_some(),
+            "port 80"
+        );
+        assert!(port_mismatch("http://localhost:7480", listen).is_none());
+        assert!(port_mismatch("https://recess.example.com", listen).is_none());
         assert!(public_url("http://recess.example.com").is_err());
         assert!(public_url("https://recess.example.com/sub").is_err());
         assert_eq!(

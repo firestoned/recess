@@ -150,10 +150,16 @@ on your own machine, is off here: nothing is written, so the root filesystem sta
 
 Without `--oidc-issuer`, nothing changes. Recess listens on loopback only, the printed link
 carries its key, and the cluster is read with your kubeconfig. You can also try the sign-in
-locally against a Dex whose `kubernetes` client is public, since Dex accepts any
-`http://localhost` redirect for a public client:
+locally against your Dex. The public URL is this server, so its port is the one it listens on
+(7480 unless `--listen` says otherwise):
 
 ```sh
-recess web --view admin --listen 127.0.0.1:7491 \
-  --oidc-issuer https://dex.bar.foo.io --public-url http://localhost:7491
+recess web --view admin \
+  --oidc-issuer https://dex.bar.foo.io --public-url http://localhost:7480
 ```
+
+Dex must accept `http://localhost:7480/auth/callback` as the client's redirect. A public
+client that lists no `redirectURIs` accepts any `http://localhost` one. Most `kubernetes`
+clients list kubelogin's (`http://localhost:8000`, `http://localhost:18000`), and then Dex
+accepts only what is listed and answers "Unregistered redirect_uri": add the callback to the
+list.
