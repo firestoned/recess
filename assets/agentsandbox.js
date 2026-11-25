@@ -236,27 +236,32 @@ function label(at, cls = '', node = null) {
   return l;
 }
 function setLabel(l, title, detail) {
-  if (l.b.textContent !== title) l.b.textContent = title;
+  if (l.b.textContent !== title) { l.b.textContent = title; l.w = 0; }
   const d = detail || '';
-  if (l.i.textContent !== d) l.i.textContent = d;
+  if (l.i.textContent !== d) { l.i.textContent = d; l.w = 0; }
 }
 function placeLabels() {
   for (const l of LABELS) {
     const at = typeof l.at === 'function' ? l.at() : l.at;
     const c = toCam(at);
     const show = l.show() && c[2] > NEAR;
-    if (!show) { l.el.style.opacity = '0'; continue; }
+    if (!show) { if (l.op !== '0') { l.el.style.opacity = '0'; l.op = '0'; } continue; }
     const [x, y] = proj(c);
     // Not under the bar or the caption, and not for a station off screen.
-    if (y < 52 || y > H - 84 || x < -10 || x > W - 30) { l.el.style.opacity = '0'; l.el.style.pointerEvents = 'none'; continue; }
-    l.el.style.opacity = String(clamp(fog(c[2]) * 1.2, 0.25, 1));
+    if (y < 52 || y > H - 84 || x < -10 || x > W - 30) { if (l.op !== '0') { l.el.style.opacity = '0'; l.el.style.pointerEvents = 'none'; l.op = '0'; l.pe = 'none'; } continue; }
+    const op = clamp(fog(c[2]) * 1.2, 0.25, 1).toFixed(2);
+    if (l.op !== op) { l.el.style.opacity = op; l.op = op; }
     // Kept on screen: a station near the edge keeps its label readable.
-    const lx = clamp(x + 14, 8, Math.max(8, W - l.el.offsetWidth - 8));
-    l.el.style.transform = `translate(${Math.round(lx)}px, ${Math.round(y - 10)}px)`;
+    // Its width is read once per text (setLabel clears it): a read per frame forces a layout.
+    if (!l.w) l.w = l.el.offsetWidth || 80;
+    const lx = clamp(x + 14, 8, Math.max(8, W - l.w - 8));
+    const tf = `translate(${Math.round(lx)}px, ${Math.round(y - 10)}px)`;
+    if (l.tf !== tf) { l.el.style.transform = tf; l.tf = tf; }
     l.el.classList.toggle('lit', l.lit());
     l.el.classList.toggle('sel', !!l.node && view.sel?.kind === 'node' && view.sel.id === l.node);
     l.el.classList.toggle('marked', !!l.node && MARK.keys.has(l.node));
-    l.el.style.pointerEvents = D.act >= 3 ? '' : 'none';
+    const pe = D.act >= 3 ? '' : 'none';
+    if (l.pe !== pe) { l.el.style.pointerEvents = pe; l.pe = pe; }
   }
 }
 
@@ -673,8 +678,8 @@ function captureScribbles(p) {
 function drawEnvelope() {
   if (env.scale <= 0.001 || env.sink >= 0.999) return;
   const s = env.scale * 0.85 * (1 - env.sink * 0.6), a = 1 - env.sink;
-  // A gentle sway, and the turn from the face (flip 0) to the back (flip 1).
-  const ry = Math.sin(clock * 0.7) * 0.3 * (1 - env.sink) + Math.PI * (1 - env.flip);
+  // The turn from the face (flip 0) to the back (flip 1).
+  const ry = Math.PI * (1 - env.flip);
   const toWorld = (p, k = s) => add(rotY(mul(p, k), ry), env.pos);
   const w = 1.6, h = 1.05;
   // How much of each side faces the camera.
@@ -746,13 +751,13 @@ function drawStations() {
   draw(SHAPES.vm, ST.vm, C.wire, lit(7) * 0.9);
   draw(SHAPES.vmRack, ST.vm, C.wire, lit(7) * 0.6, { glow: false });
   const cc = fx.failed && act >= 8 ? C.bad : C.wire;
-  draw(SHAPES.cage, ST.cage, cc, 0.25 + 0.75 * fx.cageLit, { ry: t * 0.2 });
+  draw(SHAPES.cage, ST.cage, cc, 0.25 + 0.75 * fx.cageLit, { ry: 0.2 });
   // Inside the VM, the two pieces the jail touches: the guest agent, and the egress proxy on
   // 127.0.0.1:3128, the jail's only way out.
   const inner = lit(7) * 0.85;
-  draw(SHAPES.guest, GUEST, C.wire, inner, { ry: t * 0.3 });
-  draw(SHAPES.proxy, PROXY, C.wire, inner, { ry: -t * 0.9 });
-  if (fx.cageLit > 0) lines([ST.cage, PROXY], [[0, 1]], C.wire, 0.7 * fx.cageLit, 1.2, { dash: [2, 4], dashOffset: -clock * 24 });
+  draw(SHAPES.guest, GUEST, C.wire, inner, { ry: 0.3 });
+  draw(SHAPES.proxy, PROXY, C.wire, inner, { ry: -0.4 });
+  if (fx.cageLit > 0) lines([ST.cage, PROXY], [[0, 1]], C.wire, 0.7 * fx.cageLit, 1.2, { dash: [2, 4] });
 
   // The egress gateways, one node each; the one carrying this claim's tunnels lit, when known.
   const gws = gwList().length, carrier = carrierIdx();
@@ -763,7 +768,7 @@ function drawStations() {
       const a = !on ? 0.2 : carrier < 0 ? 0.8 : carried ? 1 : 0.35;
       // Once the carrier is known the others stand back: thin and unlit.
       const unused = carrier >= 0 && !carried;
-      draw(SHAPES.gateway, g, col, a, { ry: t * (carried ? 2.2 : 0.8) + i, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1, glow: !unused });
+      draw(SHAPES.gateway, g, col, a, { ry: i * 0.7, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1, glow: !unused });
     }
     // One edge out, and only once there is traffic: to the gateway carrying the tunnels, or,
     // while which one is not reported, to the tier as a whole. No edges to mere candidates.
@@ -778,11 +783,6 @@ function drawStations() {
       if (carrier >= 0) lines(pts, chain(N, true), C.carrier, 0.12 + 0.2 * fx.tierPulse, 1, { glow: false });
       else lines(pts, chain(N, true), C.carrier, 0.35 + 0.6 * fx.tierPulse, 1 + fx.tierPulse);
     }
-    // Packets ride the carrier's tunnel while the work runs.
-    if (carrier >= 0 && fx.cageLit > 0 && fx.spark > 0) {
-      const k = (clock * 0.7) % 1;
-      draw(SHAPES.packet, mix(PROXY, gwPos(carrier), k), C.carrier, 1, { ry: clock * 4, scale: 0.8 });
-    }
   }
 
   // The audiences the workload named: where the gateways let it reach.
@@ -791,15 +791,15 @@ function drawStations() {
     const from = egressTo();
     auds.forEach((_, i) => {
       const a = audPos(i);
-      draw(SHAPES.audience, a, C.ident, 0.85, { ry: t * 0.5 + i });
+      draw(SHAPES.audience, a, C.ident, 0.85, { ry: i * 0.9 });
       // An edge only once tunnels are seen, from the one place traffic left by; which audience
       // each tunnel was for is not reported.
       if (from && fx.cageLit > 0) lines([from, a], [[0, 1]], C.carrier, 0.5 * fx.cageLit, 1.2, { glow: false });
     });
   }
   if (fx.spark > 0) {
-    draw(SHAPES.spark, ST.cage, C.wire, fx.spark, { ry: t * 2.2, rx: t * 1.3, scale: 0.8 + 0.15 * Math.sin(t * 5) });
-    draw(ring(0.55, 24), ST.cage, C.wire, fx.spark * 0.6, { rx: t * 1.7, ry: t });
+    draw(SHAPES.spark, ST.cage, C.wire, fx.spark, { ry: 0.6, rx: 0.4, scale: 0.85 });
+    draw(ring(0.55, 24), ST.cage, C.wire, fx.spark * 0.6, { rx: 1.1, ry: 0.5 });
   }
 
   // SPIRE: lit once this claim's entries are on the server. One edge in, from the API whose
@@ -807,7 +807,7 @@ function drawStations() {
   // guest's agent has attested and holds the identities.
   drawSpire(entriesShown() || attested(), t);
   if (entriesShown() && act >= 5 && act < 9) lines(BASE_EDGES.entries(), [[0, 1]], C.spire, 0.55, 1.2, { glow: false });
-  if (svidLive()) lines([add(ST.spire, [0.6, -1.2, 0.4]), add(ST.vm, [-1.6, 1.4, -1.4])], [[0, 1]], C.spire, 0.75, 1.3, { dash: [3, 5], dashOffset: -clock * 14 });
+  if (svidLive()) lines([add(ST.spire, [0.6, -1.2, 0.4]), add(ST.vm, [-1.6, 1.4, -1.4])], [[0, 1]], C.spire, 0.75, 1.3, { dash: [3, 5] });
   // The VM's vTPM attestation, as in the Admin view: its SPIRE agent proved the VM with its TPM
   // at boot and holds the node SVID from then on.
   if (vtpmLive()) { const pts = vtpmPts(); lines(pts, chain(pts.length), C.spire, view.sel?.id === 'vtpm' ? 0.85 : 0.45, view.sel?.id === 'vtpm' ? 1.4 : 1.1, { dash: [3, 5], glow: false }); }
@@ -824,7 +824,7 @@ function drawStations() {
   // authorizer gets the claim's allowlist, built from it, from the broker (EDGES: bound,
   // bundle, conform, allowlist).
   const pol = policyOf(), pface = Math.atan2(cam.pos[0] - ST.policy[0], cam.pos[2] - ST.policy[2]);
-  draw(SHAPES.policyDoc, ST.policy, C.policy, pol.name ? 0.95 : 0.3, { ry: pface + Math.sin(t * 0.5) * 0.15, scale: 1.1 });
+  draw(SHAPES.policyDoc, ST.policy, C.policy, pol.name ? 0.95 : 0.3, { ry: pface, scale: 1.1 });
   drawCeiling(ST.ceiling, !pol.read || !!pol.ceiling, pol.read ? 1 : 0.35, t, view.sel?.id === 'ceiling');
   for (const id of ['bundle', 'conform', 'allowlist']) {
     const e = edgeById(id);
@@ -986,19 +986,21 @@ async function hopAlong(leg, from, to, dur, { move = true, packetColor = null } 
 }
 
 const navigable = () => D.act >= 3 || view.mode === 'free';
-let camPos = POSE.login.pos.slice(), camTarget = POSE.login.target.slice(), shift = 0;
+let camPos = POSE.login.pos.slice(), camTarget = POSE.login.target.slice(), shift = 0, camMoving = true;
 function moveCamera(dt) {
   const want = wantCamera();
   // Tighter tracking while hopping, so the lift-off and the settle read as one move.
   const k = REDUCED ? 1 : 1 - Math.exp(-dt * (hop ? 4.5 : 2.4));
-  camPos = mix(camPos, want.pos, k);
-  camTarget = mix(camTarget, want.target, k);
+  // Within a hair of where it is going, it is there: snapped, and no more frames for it.
+  camMoving = len(sub(camPos, want.pos)) > 0.002 || len(sub(camTarget, want.target)) > 0.002;
+  if (camMoving) { camPos = mix(camPos, want.pos, k); camTarget = mix(camTarget, want.target, k); }
+  else { camPos = want.pos.slice(); camTarget = want.target.slice(); }
   let pos = camPos, target = camTarget;
   // While the sheet's inputs are on screen the camera stays square to them; after, it can be
   // orbited, and drifts a little on its own.
   if (navigable()) {
     let off = sub(camPos, camTarget);
-    off = rotY(off, orbit.yaw + (REDUCED || view.mode === 'free' ? 0 : Math.sin(clock * 0.13) * 0.06));
+    off = rotY(off, orbit.yaw);
     const right = norm(cross(off, [0, 1, 0]));
     const pitch = clamp(orbit.pitch, -0.6, 0.9);
     off = add(mul(off, Math.cos(pitch)), add(mul(cross(right, off), Math.sin(pitch)), mul(right, dot(right, off) * (1 - Math.cos(pitch)))));
@@ -1007,7 +1009,7 @@ function moveCamera(dt) {
     off = mul(off, orbit.zoom * narrow);
     // With the inspector open the subject sits left of it: slide the camera right.
     const shiftWant = inspOpen() && W > 720 ? ($('insp').offsetWidth / 2 + 8) / cam.F * len(off) : 0;
-    shift += (shiftWant - shift) * k;
+    if (Math.abs(shiftWant - shift) > 0.002) { shift += (shiftWant - shift) * k; camMoving = true; } else shift = shiftWant;
     const side = mul(norm(cross(mul(off, -1), [0, 1, 0])), shift);
     target = add(camTarget, side);
     pos = add(target, off);
@@ -1173,7 +1175,7 @@ function drawSelection() {
       if (!n || !n.show()) continue;
       const at = n.at(), r = n.r * (n.inside ? 1.6 : 1.3) * (n.inside ? vaultScale() : 1), N = 48, pts = [];
       for (let i = 0; i < N; i++) {
-        const t = (i / N) * Math.PI * 2 + clock * 0.4;
+        const t = (i / N) * Math.PI * 2;
         pts.push(add(at, add(mul(cam.r, Math.cos(t) * r), mul(cam.u, Math.sin(t) * r))));
       }
       const edges = [];
@@ -1219,13 +1221,20 @@ function frame(now) {
   updateCards();
   placeLabels();
   placeCards();
+  // Another frame only while something moves: the run's tweens (packets, sheets, the envelope),
+  // bursts and floating output, the camera, the vault's door, the tier's pulse, a node in hand.
+  return tweens.length > 0 || fx.bursts.length > 0 || fx.floats.length > 0 || (D.act >= 8 && fx.floatQueue.length > 0)
+    || camMoving || hop != null || vault.open !== vault.want || (fx.tierPulse || 0) > 0 || !!HAND.m;
 }
 
-// While the login is under way, the request goes to the issuer and comes back, on a loop.
-let loginInFlight = false;
+// While the login is under way, the request goes to the issuer and comes back: a few times,
+// not for as long as a browser tab is left waiting (each trip keeps the frames running).
+let loginInFlight = false, loginTrips = 0;
 function loginLoop() {
-  if (D.act !== 1 || loginInFlight || fx.failed) return;
+  if (D.act !== 1) { loginTrips = 0; return; }
+  if (loginInFlight || fx.failed || loginTrips >= 4) return;
   loginInFlight = true;
+  loginTrips++;
   LEGS.login.p = 1;
   packet(LEGS.login, { color: C.ident, dur: 1.2 })
     .then(() => wait(0.5))
@@ -1387,7 +1396,7 @@ function drawRolodex(card, alpha = 1) {
   const { c, W } = card, H = card.H, ay = c[1] - H / 2 - 0.3, az = c[2] - 0.55;
   const rect = (pts) => lines(pts, chain(4, true), C.ident, 0.55 * alpha, 1);
   rect([[-W / 2, -H / 2, 0], [W / 2, -H / 2, 0], [W / 2, H / 2, 0], [-W / 2, H / 2, 0]].map((q) => add(c, q)));
-  const sway = REDUCED ? 0 : Math.sin(clock * 0.6) * 0.03;
+  const sway = 0;
   for (const [i, deg] of [-14, -27, -40, -53, -66].entries()) {
     const a = (deg * Math.PI) / 180 + sway;
     const at = (x, h) => [c[0] + x, ay + h * Math.cos(a), az + h * Math.sin(a)];
@@ -1430,10 +1439,14 @@ function placeCards() {
     if (el.hidden === show) el.hidden = !show;
     if (!show) continue;
     s = Math.min(s, 2.2);
-    card.H = (card.W * el.offsetHeight) / el.offsetWidth;
-    el.style.transform = `translate(${Math.round(x - (el.offsetWidth * s) / 2)}px, ${Math.round(y - (el.offsetHeight * s) / 2)}px) scale(${s.toFixed(3)})`;
-    el.style.opacity = String(clamp(fog(c[2]) * 1.25, 0.4, 1) * (key === 'you' ? clamp((fx.youCard - 0.4) / 0.6) : 1));
-    el.style.pointerEvents = 'auto';
+    // Its size read once, before any write; its style written only when it changes.
+    const ow = el.offsetWidth, oh = el.offsetHeight;
+    card.H = (card.W * oh) / ow;
+    const tf = `translate(${Math.round(x - (ow * s) / 2)}px, ${Math.round(y - (oh * s) / 2)}px) scale(${s.toFixed(3)})`;
+    const op = (clamp(fog(c[2]) * 1.25, 0.4, 1) * (key === 'you' ? clamp((fx.youCard - 0.4) / 0.6) : 1)).toFixed(2);
+    if (card.tf !== tf) { el.style.transform = tf; card.tf = tf; }
+    if (card.op !== op) { el.style.opacity = op; card.op = op; }
+    if (el.style.pointerEvents !== 'auto') el.style.pointerEvents = 'auto';
     el.classList.toggle('sel', view.sel?.kind === 'node' && view.sel.id === card.node);
     el.classList.toggle('marked', MARK.keys.has(card.node));
   }
@@ -2400,7 +2413,7 @@ function attach(id) {
   if (es) es.close();
   runId = id;
   es = new EventSource(`/api/events?run=${encodeURIComponent(id)}`);
-  es.onmessage = (m) => { try { handle(JSON.parse(m.data)); } catch (err) { console.error(err); } };
+  es.onmessage = (m) => { try { handle(JSON.parse(m.data)); } catch (err) { console.error(err); } wake(); };
   es.addEventListener('end', () => { es.close(); es = null; });
   paintBar();
 }

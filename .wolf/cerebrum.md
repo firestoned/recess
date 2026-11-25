@@ -49,6 +49,8 @@ budget_tokens: 2000
 - [2026-11-22] Changed src/util.rs and ran only `cargo test`; CI failed on `cargo fmt --check` (PR 4). Run `cargo fmt` (or `make check` on slate) after every Rust edit, not only after the first.
 - [2026-11-22] The demo's few output lines hid a per-line forced layout in the 3D output box; live bursts dropped it to 18 fps. Write DOM from streamed events once a frame, never read layout (scrollHeight, offsetWidth) per event, and load-test with a burst of thousands of lines.
 - [2026-11-22] Stopped test servers with `pkill -f "recess web"`, which also matches the user's own running Recess. Stop only your own, by exact path and port.
+- [2026-11-24] The 3D views drew every frame forever (and spun, bobbed and auto-rotated), which ran Firefox's GPU process hot. Frames are on demand (theatre.js `wake()`; a view's frame returns whether it still moves): new motion must count itself as busy or ride a tween, and decorative motion on the clock is not wanted.
+- [2026-11-24] PR #10 squash-merged only its first two commits; later commits on the same branch were stranded. After a squash merge, start new work on a fresh branch from main.
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
 <!-- Format: [YYYY-MM-DD] Description of what went wrong and what to do instead. -->

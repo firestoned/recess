@@ -86,8 +86,9 @@ function aim(pos, target) {
 }
 const toCam = (p) => { const d = sub(p, cam.pos); return [dot(d, cam.r), dot(d, cam.u), dot(d, cam.f)]; };
 const proj = (c) => [cam.cx + c[0] * cam.F / c[2], cam.cy - c[1] * cam.F / c[2]];
-// How far the fog reaches, and whether a line glows unless told: each view sets its own.
-const THEATRE = { fogFar: 62, glow: true };
+// How far the fog reaches, and whether a line glows unless told: off, as the glow pass (a
+// second, wide stroke) is most of a frame's cost; what is lit or picked asks for it.
+const THEATRE = { fogFar: 62, glow: false };
 const fog = (z) => clamp(1.25 - z / THEATRE.fogFar, 0.07, 1);
 
 // One segment in camera space, clipped at the near plane.
@@ -125,22 +126,37 @@ const chain = (n, closed = false) => {
 };
 function polyline(pts, color, alpha, width, opts) { lines(pts, chain(pts.length), color, alpha, width, opts); }
 
-// The frame loop: `step` draws one frame, and the next is asked for before it runs. An error
-// in a frame is reported (once while it repeats) and the loop goes on: one bad frame must not
-// freeze the view, nor stop the live updates the frames apply.
+// The frame loop, on demand: nothing is drawn while nothing moves. A frame runs when something
+// asks for one (wake(): input, data from the server, a change of view), and the next only while
+// `step` says it is still moving (it returns true) or a wake asked for a while (`ms`). An error
+// in a frame is reported (once while it repeats) and does not stop the next wake.
+const FRAMES = { tick: null, raf: 0, until: 0 };
+function wake(ms = 0) {
+  if (ms) FRAMES.until = Math.max(FRAMES.until, performance.now() + ms);
+  if (!FRAMES.raf && FRAMES.tick) FRAMES.raf = requestAnimationFrame(FRAMES.tick);
+}
 function runFrames(step) {
   let reported = '';
-  const tick = (now) => {
-    requestAnimationFrame(tick);
+  FRAMES.tick = (now) => {
+    FRAMES.raf = 0;
+    let more = false;
     try {
-      step(now);
+      more = !!step(now);
     } catch (err) {
       const what = String(err?.stack || err);
       if (what !== reported) { reported = what; console.error('recess: a frame failed; the next one runs', err); }
     }
+    if (more || now < FRAMES.until) FRAMES.raf = requestAnimationFrame(FRAMES.tick);
   };
-  return tick;
+  return FRAMES.tick;
 }
+// Anything you do may change the picture: a frame, and a few after it for what eases.
+for (const type of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'keyup', 'input', 'change', 'resize', 'focus']) {
+  window.addEventListener(type, () => wake(300), { capture: true, passive: true });
+}
+document.addEventListener('visibilitychange', () => wake(300));
+// A slow beat for what changes with time alone (an agent's age, a timer): one frame a second.
+setInterval(() => { if (!document.hidden) wake(); }, 1000);
 
 // ------------------------------------------------------------------------------ shapes (local)
 
@@ -262,32 +278,33 @@ const SHAPES = {
   shieldBad: { pts: [[-0.17, 0.25, 0], [0.17, -0.12, 0], [0.17, 0.25, 0], [-0.17, -0.12, 0]], edges: [[0, 1], [2, 3]] },
 };
 
-// The stations as each view draws them: `a` how lit, `t` the clock.
+// The stations as each view draws them: `a` how lit. `t`, the clock, no longer moves them: the
+// theatre stands still unless something happens in it.
 function drawIssuer(a, t) {
-  draw(SHAPES.issuer, ST.issuer, C.ident, a, { ry: t * 0.25 });
-  draw(SHAPES.issuerRing, add(ST.issuer, [0, 1.6 + Math.sin(t * 1.3) * 0.15, 0]), C.ident, a * 0.8, { ry: -t * 0.4, rx: 0.25 });
+  draw(SHAPES.issuer, ST.issuer, C.ident, a, { ry: 0.3 });
+  draw(SHAPES.issuerRing, add(ST.issuer, [0, 1.6, 0]), C.ident, a * 0.8, { rx: 0.25 });
 }
 function drawBroker(a, t) {
-  draw(SHAPES.brokerCore, ST.broker, C.wire, a, { ry: t * 0.6, rx: t * 0.3 });
-  draw(SHAPES.brokerRing, ST.broker, C.wire, a * 0.8, { rx: 0.5, ry: t * 0.2 });
+  draw(SHAPES.brokerCore, ST.broker, C.wire, a, { ry: 0.6, rx: 0.3 });
+  draw(SHAPES.brokerRing, ST.broker, C.wire, a * 0.8, { rx: 0.5 });
 }
 function drawApi(a, t) {
   for (const [i, y] of [-0.85, 0, 0.85].entries()) {
-    draw(SHAPES.apiPlate, add(ST.api, [0, y, 0]), C.wire, a, { ry: t * 0.15 * (i % 2 ? -1 : 1) });
+    draw(SHAPES.apiPlate, add(ST.api, [0, y, 0]), C.wire, a, { ry: i % 2 ? 0.26 : 0 });
   }
 }
 // SPIRE: lit once it holds identities for what is shown.
 function drawSpire(on, t) {
   const a = on ? 0.95 : 0.35;
-  draw(SHAPES.spire, ST.spire, C.spire, a, { ry: t * 0.2, glow: on });
-  draw(SHAPES.spireOrbit, add(ST.spire, [0, 0.4 + Math.sin(t) * 0.25, 0]), C.spire, a * 0.5, { rx: 0.35, ry: t * 0.5, glow: false });
+  draw(SHAPES.spire, ST.spire, C.spire, a, { glow: on });
+  draw(SHAPES.spireOrbit, add(ST.spire, [0, 0.4, 0]), C.spire, a * 0.5, { rx: 0.35, glow: false });
 }
 // OpenBao: the transit key over its safe, turned to face the camera; lit once it has sealed.
 function drawBao(on, t) {
   const a = on ? 0.95 : 0.35;
-  draw(SHAPES.baoBody, ST.bao, C.seal, a * 0.8, { ry: -t * 0.15, glow: false });
+  draw(SHAPES.baoBody, ST.bao, C.seal, a * 0.8, { glow: false });
   const kf = Math.atan2(cam.pos[0] - ST.bao[0], cam.pos[2] - ST.bao[2]);
-  draw(SHAPES.baoKey, add(ST.bao, [0, 1.55 + Math.sin(t * 1.1) * 0.12, 0]), C.seal, a, { ry: kf, rz: Math.sin(t * 0.7) * 0.15, glow: on, width: on ? 1.5 : 1 });
+  draw(SHAPES.baoKey, add(ST.bao, [0, 1.55, 0]), C.seal, a, { ry: kf, glow: on, width: on ? 1.5 : 1 });
 }
 // A policy's ceiling at c (its policy below it): solid with its approval, dashed and red when
 // there is none, as notaio then refuses to publish the policy (Ready=False, NoApprovedCeiling).
@@ -295,7 +312,7 @@ function drawBao(on, t) {
 function drawCeiling(c, have, a, t, picked = false) {
   const face = Math.atan2(cam.pos[0] - c[0], cam.pos[2] - c[2]);
   const col = have ? C.policy : C.bad;
-  draw(SHAPES.ceiling, c, col, (have ? 0.9 : 0.6) * a, { ry: face, width: picked ? 1.8 : 1.2, glow: picked, dash: have ? null : [3, 4], scale: 1 + Math.sin(t * 0.8) * 0.02 });
+  draw(SHAPES.ceiling, c, col, (have ? 0.9 : 0.6) * a, { ry: face, width: picked ? 1.8 : 1.2, glow: picked, dash: have ? null : [3, 4] });
   lines([add(c, [0, -0.45, 0]), add(c, [0, -CEILING_DY + 1.25, 0])], [[0, 1]], col, (have ? 0.45 : 0.3) * a, 1, { dash: [2, 3], glow: false });
 }
 // An authorization checkpoint at p, facing the camera: a shield, and in it a tick, a cross, or

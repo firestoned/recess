@@ -163,7 +163,9 @@ gateway is a candidate, dashed, and the details say why; the demo's scripted wor
 | Ctrl-drag, Option-drag, Ctrl-click then click | move a station ([Arranging the theatre](#arranging-the-theatre)) |
 
 The renderer is a small one on a 2D canvas, with no 3D library and nothing loaded from
-elsewhere; `prefers-reduced-motion` shortens every animation.
+elsewhere; `prefers-reduced-motion` shortens every animation. It draws only when something
+changes (your input, data from the cluster, the run moving on), and once a second for the clock
+otherwise: an idle page costs next to nothing, and nothing spins or drifts on its own.
 
 ### Arranging the theatre
 
