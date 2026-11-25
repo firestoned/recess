@@ -3,14 +3,17 @@
 
 # Recess in a cluster, behind Dex
 
-Run this way, Recess is a page your team opens to watch every live agent (the Admin view).
+Run this way, Recess is a page your team opens to watch every live agent (the Admin view) and
+the cluster itself (the Kubernetes view).
 Everyone signs in with Dex first: `/` and every other page send a visitor who is not signed in
 to Dex, then back. Every Kubernetes read is then made with **that person's own ID token**, so
 the API server applies their RBAC: two people can see different things on the same page, and a
 kind someone may not read is named on the page instead of shown.
 
 Recess itself holds no access. Its service account is bound to nothing, and its token is never
-mounted. The pod gets only the cluster's CA and its namespace, which is all the client needs to
+mounted. Nor does it impersonate (as some dashboards do with an `impersonate` grant): it has no
+access of its own to fall back on, so a read is never more than the person could make with
+`kubectl`. The pod gets only the cluster's CA and its namespace, which is all the client needs to
 find the API server.
 
 Runs are refused on a shared Recess: a mediatore login and a claim would act as whoever
@@ -63,6 +66,21 @@ group. [`broker-rbac.yaml`](broker-rbac.yaml) is for the broker's namespace: the
 (the gateway decisions) and its Secrets' names. It is applied on its own, and granted with care:
 RBAC cannot grant "metadata only".
 
+The Kubernetes view needs nothing more of Recess. A person sees what their own bindings let
+them list across the cluster: people who already hold `view` or their own read roles see
+their namespaces and pods with no change. For those who do not:
+
+- [`kubernetes-rbac.yaml`](kubernetes-rbac.yaml): namespaces and pods, plus the custom
+  resources' groups you list in it (a wildcard group would match Secrets too).
+- [`kubernetes-secrets-rbac.yaml`](kubernetes-secrets-rbac.yaml): the vaults. Recess lists
+  Secrets as metadata only and reads a value only when a drawer is opened, but RBAC cannot
+  grant less than `get`, `list` and `watch`, which read every value by other means.
+
+Both are examples with a placeholder group, applied on their own, and neither is in
+`kustomization.yaml`. The view watches each kind across the whole cluster, so a RoleBinding
+in one namespace does not show that namespace's pods or Secrets. Whether a vault's drawers
+open is asked per namespace (a SelfSubjectAccessReview), which every signed-in person may do.
+
 **4. TLS in front.** The Service is plain HTTP. Put an ingress with TLS in front of it, at the
 host in `RECESS_PUBLIC_URL`. Recess refuses an `http://` public URL other than localhost,
 because the session cookie must not cross a network in clear.
@@ -73,11 +91,24 @@ because the session cookie must not cross a network in clear.
 $EDITOR deploy/config.env        # the issuer, the public URL, the broker's namespace
 kubectl apply -k deploy/
 kubectl -n banlieue-system apply -f deploy/broker-rbac.yaml   # optional, see above
+kubectl apply -f deploy/kubernetes-rbac.yaml                    # optional, see above
+kubectl apply -f deploy/kubernetes-secrets-rbac.yaml            # optional, with care
 ```
 
-The image is built from the repository's `Dockerfile` (`make image`): the release binary on
-`gcr.io/distroless/cc-debian13:nonroot`, running as uid 65532 with a read-only root
-filesystem.
+The image is `ghcr.io/firestoned/recess`, built from the repository's `Dockerfile` (`make
+image` locally): the release binary on `gcr.io/distroless/cc-debian13:nonroot`, running as
+uid 65532 with a read-only root filesystem. CI pushes it on every merge to main (`main`,
+`latest`, `sha-<commit>`) and on every release (its version: v0.1.0 is `0.1.0`), signed
+with Cosign and attested:
+
+```sh
+cosign verify ghcr.io/firestoned/recess:0.1.0 \
+  --certificate-identity-regexp '^https://github.com/firestoned/recess/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify oci://ghcr.io/firestoned/recess:0.1.0 --repo firestoned/recess | tee
+```
+
+`kustomization.yaml` pins the release; set `newTag` to `main` to follow main.
 
 ## How a sign-in goes
 

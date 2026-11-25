@@ -1,0 +1,42 @@
+# Copyright (c) 2026 Erick Bourgeois, Recess
+# SPDX-License-Identifier: Apache-2.0
+#
+# What a person needs for the Kubernetes view: the namespaces as rooms, their pods, and the
+# custom resources on the shelves. Recess holds no access of its own and is bound to none of
+# this: every read is made with the signed-in person's own token, so each sees what their
+# own bindings allow, and a kind they may not read is named on the page instead of shown.
+# People who can already read these (`view`, `cluster-admin`, your own roles) need nothing
+# here. Not in kustomization.yaml: an example, applied on its own if you want it. Discovery and the "may I read this vault?" questions need no
+# grant: every authenticated user may make them.
+#
+# The view watches each kind across the whole cluster, so these are cluster-wide grants: a
+# RoleBinding in one namespace does not let the view list that kind.
+#
+# Custom resources: list the groups you want on the shelves. `apiGroups: ["*"]` would show
+# them all, but it matches the core group too, and with it every Secret's value; the vault
+# is granted on its own (kubernetes-secrets-rbac.yaml).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: recess-kubernetes-viewer
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods"]
+    verbs: ["get", "list", "watch"]
+  # Your custom resources' groups, as an example:
+  # - apiGroups: ["cert-manager.io", "gateway.networking.k8s.io"]
+  #   resources: ["*"]
+  #   verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: recess-kubernetes-viewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: recess-kubernetes-viewer
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: "github:example-org:platform"
