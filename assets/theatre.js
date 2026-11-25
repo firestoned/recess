@@ -86,8 +86,11 @@ function aim(pos, target) {
 }
 const toCam = (p) => { const d = sub(p, cam.pos); return [dot(d, cam.r), dot(d, cam.u), dot(d, cam.f)]; };
 const proj = (c) => [cam.cx + c[0] * cam.F / c[2], cam.cy - c[1] * cam.F / c[2]];
-// How far the fog reaches, and whether a line glows unless told: each view sets its own.
-const THEATRE = { fogFar: 62, glow: true };
+// How far the fog reaches, and whether a line glows unless told: off, as the glow pass (a
+// second, wide stroke) is most of a frame's cost. What is picked glows: a view sets `focus` (a
+// world point) and `focusR`, and every line drawn within that of it gets the glow pass, whatever
+// shape it belongs to; a picked edge asks for it itself.
+const THEATRE = { fogFar: 62, glow: false, focus: null, focusR: 0 };
 const fog = (z) => clamp(1.25 - z / THEATRE.fogFar, 0.07, 1);
 
 // One segment in camera space, clipped at the near plane.
@@ -111,7 +114,14 @@ function lines(pts, edges, color, alpha = 1, width = 1, opts = {}) {
   for (const [i, j] of edges) seg(cs[i], cs[j]);
   if (opts.dash) ctx.setLineDash(opts.dash);
   if (opts.dashOffset) ctx.lineDashOffset = opts.dashOffset;
-  if (opts.glow ?? THEATRE.glow) {
+  let glow = opts.glow || THEATRE.glow;
+  if (!glow && THEATRE.focus && opts.focus !== false) {
+    let x = 0, y = 0, z = 0;
+    for (const p of pts) { x += p[0]; y += p[1]; z += p[2]; }
+    const f = THEATRE.focus, k = pts.length;
+    glow = (x / k - f[0]) ** 2 + (y / k - f[1]) ** 2 + (z / k - f[2]) ** 2 < THEATRE.focusR ** 2;
+  }
+  if (glow) {
     ctx.strokeStyle = rgba(color, a * 0.16); ctx.lineWidth = width * 4.5; ctx.stroke();
   }
   ctx.strokeStyle = rgba(color, a); ctx.lineWidth = width; ctx.stroke();
@@ -125,22 +135,37 @@ const chain = (n, closed = false) => {
 };
 function polyline(pts, color, alpha, width, opts) { lines(pts, chain(pts.length), color, alpha, width, opts); }
 
-// The frame loop: `step` draws one frame, and the next is asked for before it runs. An error
-// in a frame is reported (once while it repeats) and the loop goes on: one bad frame must not
-// freeze the view, nor stop the live updates the frames apply.
+// The frame loop, on demand: nothing is drawn while nothing moves. A frame runs when something
+// asks for one (wake(): input, data from the server, a change of view), and the next only while
+// `step` says it is still moving (it returns true) or a wake asked for a while (`ms`). An error
+// in a frame is reported (once while it repeats) and does not stop the next wake.
+const FRAMES = { tick: null, raf: 0, until: 0 };
+function wake(ms = 0) {
+  if (ms) FRAMES.until = Math.max(FRAMES.until, performance.now() + ms);
+  if (!FRAMES.raf && FRAMES.tick) FRAMES.raf = requestAnimationFrame(FRAMES.tick);
+}
 function runFrames(step) {
   let reported = '';
-  const tick = (now) => {
-    requestAnimationFrame(tick);
+  FRAMES.tick = (now) => {
+    FRAMES.raf = 0;
+    let more = false;
     try {
-      step(now);
+      more = !!step(now);
     } catch (err) {
       const what = String(err?.stack || err);
       if (what !== reported) { reported = what; console.error('recess: a frame failed; the next one runs', err); }
     }
+    if (more || now < FRAMES.until) FRAMES.raf = requestAnimationFrame(FRAMES.tick);
   };
-  return tick;
+  return FRAMES.tick;
 }
+// Anything you do may change the picture: a frame, and a few after it for what eases.
+for (const type of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'keyup', 'input', 'change', 'resize', 'focus']) {
+  window.addEventListener(type, () => wake(300), { capture: true, passive: true });
+}
+document.addEventListener('visibilitychange', () => wake(300));
+// A slow beat for what changes with time alone (an agent's age, a timer): one frame a second.
+setInterval(() => { if (!document.hidden) wake(); }, 1000);
 
 // ------------------------------------------------------------------------------ shapes (local)
 
@@ -262,32 +287,33 @@ const SHAPES = {
   shieldBad: { pts: [[-0.17, 0.25, 0], [0.17, -0.12, 0], [0.17, 0.25, 0], [-0.17, -0.12, 0]], edges: [[0, 1], [2, 3]] },
 };
 
-// The stations as each view draws them: `a` how lit, `t` the clock.
+// The stations as each view draws them: `a` how lit. `t`, the clock, no longer moves them: the
+// theatre stands still unless something happens in it.
 function drawIssuer(a, t) {
-  draw(SHAPES.issuer, ST.issuer, C.ident, a, { ry: t * 0.25 });
-  draw(SHAPES.issuerRing, add(ST.issuer, [0, 1.6 + Math.sin(t * 1.3) * 0.15, 0]), C.ident, a * 0.8, { ry: -t * 0.4, rx: 0.25 });
+  draw(SHAPES.issuer, ST.issuer, C.ident, a, { ry: 0.3 });
+  draw(SHAPES.issuerRing, add(ST.issuer, [0, 1.6, 0]), C.ident, a * 0.8, { rx: 0.25 });
 }
 function drawBroker(a, t) {
-  draw(SHAPES.brokerCore, ST.broker, C.wire, a, { ry: t * 0.6, rx: t * 0.3 });
-  draw(SHAPES.brokerRing, ST.broker, C.wire, a * 0.8, { rx: 0.5, ry: t * 0.2 });
+  draw(SHAPES.brokerCore, ST.broker, C.wire, a, { ry: 0.6, rx: 0.3 });
+  draw(SHAPES.brokerRing, ST.broker, C.wire, a * 0.8, { rx: 0.5 });
 }
 function drawApi(a, t) {
   for (const [i, y] of [-0.85, 0, 0.85].entries()) {
-    draw(SHAPES.apiPlate, add(ST.api, [0, y, 0]), C.wire, a, { ry: t * 0.15 * (i % 2 ? -1 : 1) });
+    draw(SHAPES.apiPlate, add(ST.api, [0, y, 0]), C.wire, a, { ry: i % 2 ? 0.26 : 0 });
   }
 }
 // SPIRE: lit once it holds identities for what is shown.
 function drawSpire(on, t) {
   const a = on ? 0.95 : 0.35;
-  draw(SHAPES.spire, ST.spire, C.spire, a, { ry: t * 0.2, glow: on });
-  draw(SHAPES.spireOrbit, add(ST.spire, [0, 0.4 + Math.sin(t) * 0.25, 0]), C.spire, a * 0.5, { rx: 0.35, ry: t * 0.5, glow: false });
+  draw(SHAPES.spire, ST.spire, C.spire, a);
+  draw(SHAPES.spireOrbit, add(ST.spire, [0, 0.4, 0]), C.spire, a * 0.5, { rx: 0.35, glow: false });
 }
 // OpenBao: the transit key over its safe, turned to face the camera; lit once it has sealed.
 function drawBao(on, t) {
   const a = on ? 0.95 : 0.35;
-  draw(SHAPES.baoBody, ST.bao, C.seal, a * 0.8, { ry: -t * 0.15, glow: false });
+  draw(SHAPES.baoBody, ST.bao, C.seal, a * 0.8, { glow: false });
   const kf = Math.atan2(cam.pos[0] - ST.bao[0], cam.pos[2] - ST.bao[2]);
-  draw(SHAPES.baoKey, add(ST.bao, [0, 1.55 + Math.sin(t * 1.1) * 0.12, 0]), C.seal, a, { ry: kf, rz: Math.sin(t * 0.7) * 0.15, glow: on, width: on ? 1.5 : 1 });
+  draw(SHAPES.baoKey, add(ST.bao, [0, 1.55, 0]), C.seal, a, { ry: kf, width: on ? 1.5 : 1 });
 }
 // A policy's ceiling at c (its policy below it): solid with its approval, dashed and red when
 // there is none, as notaio then refuses to publish the policy (Ready=False, NoApprovedCeiling).
@@ -295,7 +321,7 @@ function drawBao(on, t) {
 function drawCeiling(c, have, a, t, picked = false) {
   const face = Math.atan2(cam.pos[0] - c[0], cam.pos[2] - c[2]);
   const col = have ? C.policy : C.bad;
-  draw(SHAPES.ceiling, c, col, (have ? 0.9 : 0.6) * a, { ry: face, width: picked ? 1.8 : 1.2, glow: picked, dash: have ? null : [3, 4], scale: 1 + Math.sin(t * 0.8) * 0.02 });
+  draw(SHAPES.ceiling, c, col, (have ? 0.9 : 0.6) * a, { ry: face, width: picked ? 1.8 : 1.2, glow: picked, dash: have ? null : [3, 4] });
   lines([add(c, [0, -0.45, 0]), add(c, [0, -CEILING_DY + 1.25, 0])], [[0, 1]], col, (have ? 0.45 : 0.3) * a, 1, { dash: [2, 3], glow: false });
 }
 // An authorization checkpoint at p, facing the camera: a shield, and in it a tick, a cross, or
@@ -375,20 +401,44 @@ const DESIGN = {
 // or click and click again where it goes; Esc puts it back. It moves across the floor when the
 // camera looks down on it, in the upright plane facing the camera when it looks level (Shift
 // swaps the two). Ctrl-double-click puts it back where the code stands it. Each move is kept
-// as an offset from that place, per view, and saved by the server on your machine (layout.json
-// beside config.env), so the next load stands it there again. A shared Recess shows the layout as shipped and saves nothing.
-const LAYOUT = { view: '', moved: {}, editable: false, timer: 0 };
+// as an offset from that place, per view, so the next load stands it there again: by the
+// server on your machine (layout.json beside config.env) when the Recess is yours alone; in
+// this browser (localStorage, this origin) when it is shared, so each person keeps their own
+// and nobody's moves become everyone's.
+const LAYOUT = { view: '', moved: {}, editable: false, store: '', timer: 0 };
+const LAYOUT_KEY = 'recess.layout';
+// What the browser kept, as the server would accept it: at most 512 nodes per view (LAYOUT_MAX), keys of
+// 1 to 256 characters, three finite offsets each within 1000. Anything else is dropped.
+function readLocalLayout() {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}'); } catch { return {}; }
+  const views = {};
+  for (const [view, moved] of Object.entries((all && all.views) || {})) {
+    if (!moved || typeof moved !== 'object') continue;
+    const ok = Object.entries(moved).filter(([k, v]) => k.length >= 1 && k.length <= 256 && Array.isArray(v) && v.length === 3
+      && v.every((x) => typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= 1000)).slice(0, 512);
+    if (ok.length) views[view] = Object.fromEntries(ok);
+  }
+  return views;
+}
+function localStorageWorks() {
+  try { localStorage.setItem(`${LAYOUT_KEY}.probe`, '1'); localStorage.removeItem(`${LAYOUT_KEY}.probe`); return true; } catch { return false; }
+}
 async function loadLayout(viewName) {
   LAYOUT.view = viewName;
   try {
     const r = await fetch('/api/layout');
     if (r.ok) {
       const j = await r.json();
-      LAYOUT.editable = !!j.editable;
-      LAYOUT.moved = (j.views && j.views[viewName]) || {};
+      if (j.editable) { LAYOUT.store = 'server'; LAYOUT.moved = (j.views && j.views[viewName]) || {}; }
     }
-  } catch { /* no layout: the code's own places */ }
-  for (const h of document.querySelectorAll('.layout-hint')) h.hidden = !LAYOUT.editable;
+  } catch { /* no answer: this browser's, if it keeps one */ }
+  if (!LAYOUT.store && localStorageWorks()) { LAYOUT.store = 'browser'; LAYOUT.moved = readLocalLayout()[viewName] || {}; }
+  LAYOUT.editable = !!LAYOUT.store;
+  for (const h of document.querySelectorAll('.layout-hint')) {
+    h.hidden = !LAYOUT.editable;
+    h.title = LAYOUT.store === 'browser' ? 'kept in this browser: this Recess is shared' : 'kept by Recess on this machine';
+  }
   return LAYOUT.moved;
 }
 // The offset of `id`, plus `d`; one back to nothing is dropped. Saved a moment later.
@@ -397,15 +447,23 @@ function noteMove(id, d) {
   if (o.every((v) => Math.abs(v) < 0.005)) delete LAYOUT.moved[id]; else LAYOUT.moved[id] = o;
   saveLayout();
 }
+const roundOffsets = (_, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v);
 function saveLayout() {
   if (!LAYOUT.editable) return;
   clearTimeout(LAYOUT.timer);
   LAYOUT.timer = setTimeout(() => {
-    fetch('/api/layout', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ view: LAYOUT.view, moved: LAYOUT.moved }, (_, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v)),
-    }).catch(() => {});
+    if (LAYOUT.store === 'server') {
+      fetch('/api/layout', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ view: LAYOUT.view, moved: LAYOUT.moved }, roundOffsets),
+      }).catch(() => {});
+      return;
+    }
+    // This browser's: every view's, with this one replaced (dropped when nothing is moved).
+    const views = readLocalLayout();
+    if (Object.keys(LAYOUT.moved).length) views[LAYOUT.view] = LAYOUT.moved; else delete views[LAYOUT.view];
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ views }, roundOffsets)); } catch { /* full or blocked: the move stands until the page reloads */ }
   }, 200);
 }
 // Move each point in place (a point listed twice, or shared by two lists, moves once).

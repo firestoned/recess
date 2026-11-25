@@ -152,7 +152,7 @@ gateway is a candidate, dashed, and the details say why; the demo's scripted wor
 
 | Input | Does |
 |---|---|
-| click | pick a node or an edge |
+| click | pick a node or an edge (it glows); on the floor, unpick and unmark everything |
 | double-click | open or close the vault; elsewhere, reset the orbit |
 | drag | orbit |
 | right-drag, shift-drag, Cmd-drag, W A S D | pan |
@@ -163,7 +163,10 @@ gateway is a candidate, dashed, and the details say why; the demo's scripted wor
 | Ctrl-drag, Option-drag, Ctrl-click then click | move a station ([Arranging the theatre](#arranging-the-theatre)) |
 
 The renderer is a small one on a 2D canvas, with no 3D library and nothing loaded from
-elsewhere; `prefers-reduced-motion` shortens every animation.
+elsewhere; `prefers-reduced-motion` shortens every animation. It draws only when something
+changes (your input, data from the cluster, the run moving on), and once a second for the clock
+otherwise: an idle page costs next to nothing, and nothing spins or drifts on its own. Only what
+is picked glows.
 
 ### Arranging the theatre
 
@@ -199,8 +202,11 @@ stands each thing, by node or group (`spire`, `issuer`, `gateways`, `ns/team-a`,
 load, of either view, stands everything there again. Delete the file, or a view's entry in it,
 to start over. A station the code later moves keeps your offset from its new place.
 
-A shared Recess ([In a cluster](#in-a-cluster)) shows the layout as shipped and saves nothing;
-the "ctrl- or ⌥-drag to move" hint in the caption shows only where moves are kept.
+A shared Recess ([In a cluster](#in-a-cluster)) saves nothing on the server, so one person's
+moves never become everyone's: each browser keeps its own layout instead, in `localStorage`
+for that Recess's address (`recess.layout`). It follows you in that browser only; clear the
+site's data to start over. Where neither can keep it (a private window that blocks storage),
+the layout is the one shipped and the "ctrl- or ⌥-drag to move" hint is not shown.
 
 ### Recording it
 

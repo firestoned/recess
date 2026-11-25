@@ -738,16 +738,18 @@ const hostLabels = [];
 // A label beside its point, or centred under it (`under`).
 function placeLabel(l, p, show, alpha = 1, under = false) {
   if (!l) return;
-  const hide = () => { if (l.shown !== false) { l.el.style.opacity = '0'; l.el.style.pointerEvents = 'none'; l.shown = false; } };
+  const hide = () => { if (l.shown !== false) { l.el.style.opacity = '0'; l.el.style.pointerEvents = 'none'; l.shown = false; l.op = '0'; } };
   const c = toCam(p);
   if (!show || c[2] <= NEAR) return hide();
   const [x, y] = proj(c);
   if (y < 52 || y > H - 84 || x < -10 || x > W - 30) return hide();
   if (!l.w) l.w = l.el.offsetWidth || 80;
   const lx = clamp(under ? x - l.w / 2 : x + 12, 8, Math.max(8, W - l.w - 8));
-  l.el.style.transform = `translate(${Math.round(lx)}px, ${Math.round(under ? y + 2 : y - 10)}px)`;
-  l.el.style.opacity = String(clamp(fog(c[2]) * 1.2 * alpha, 0.25, 1));
-  l.el.style.pointerEvents = '';
+  // Written only when they change: a style write per label per frame is a style recalculation.
+  const tf = `translate(${Math.round(lx)}px, ${Math.round(under ? y + 2 : y - 10)}px)`, op = clamp(fog(c[2]) * 1.2 * alpha, 0.25, 1).toFixed(2);
+  if (l.tf !== tf) { l.el.style.transform = tf; l.tf = tf; }
+  if (l.op !== op || l.shown !== true) { l.el.style.opacity = op; l.op = op; }
+  if (l.shown !== true) l.el.style.pointerEvents = '';
   l.el.classList.toggle('sel', view.sel === l.key);
   const ln = MARK.keys.size && nodes.get(l.key);
   l.el.classList.toggle('marked', !!ln && MARK.keys.has(groupOf(ln)));
@@ -939,31 +941,47 @@ function frame(now) {
   // Cleared once the layout is done, so a layout that failed is tried again next frame.
   if (dirty) { layout(); notePackets(); paintBar(); dirty = false; }
 
-  // Nodes ease to their places; new ones rise in, gone ones fade and are dropped.
+  // Nodes ease to their places; new ones rise in, gone ones fade and are dropped. Once there,
+  // they snap and stop asking for frames.
   const k = 1 - Math.exp(-dt * 4);
+  let moving = false;
   for (const [key, n] of nodes) {
     if (!n.pos) n.pos = n.kind === 'agent' || n.kind === 'vm' ? add(n.goal, [0, -2, 0]) : n.goal.slice();
-    n.pos = mix(n.pos, n.goal, REDUCED ? 1 : k);
-    n.alpha = n.gone ? Math.max(0, n.alpha - dt * 1.2) : Math.min(1, n.alpha + dt * 1.5);
+    if (len(sub(n.pos, n.goal)) < 0.01) { if (n.pos[0] !== n.goal[0] || n.pos[1] !== n.goal[1] || n.pos[2] !== n.goal[2]) n.pos = n.goal.slice(); }
+    else { n.pos = mix(n.pos, n.goal, REDUCED ? 1 : k); moving = true; }
+    const alpha = n.gone ? Math.max(0, n.alpha - dt * 1.2) : Math.min(1, n.alpha + dt * 1.5);
+    if (alpha !== n.alpha) { n.alpha = alpha; moving = true; }
     if (n.gone && n.alpha <= 0) { n.label?.el.remove(); nodes.delete(key); lastEgress.delete(key); if (view.sel === key) select(null); }
   }
 
-  // The camera: orbiting its target, turning slowly while nobody touches it.
-  view.idle += dt;
-  if (!view.sel && view.idle > 8 && !REDUCED) view.yaw += dt * 0.025;
-  if (view.goal) view.target = mix(view.target, view.goal, 1 - Math.exp(-dt * 3));
+  // The camera: orbiting its target; it stays where you leave it.
+  if (view.goal) {
+    if (len(sub(view.target, view.goal)) < 0.005) view.target = view.goal.slice();
+    else { view.target = mix(view.target, view.goal, 1 - Math.exp(-dt * 3)); moving = true; }
+  }
   const off = rotY(rotX([0, 0, view.dist], -view.pitch), view.yaw);
   // With the details open, the scene's centre moves left of them.
-  view.shift += ((inspOpen ? view.dist * 0.2 : 0) - view.shift) * (1 - Math.exp(-dt * 4));
+  const shiftWant = inspOpen ? view.dist * 0.2 : 0;
+  if (Math.abs(shiftWant - view.shift) < 0.005) view.shift = shiftWant;
+  else { view.shift += (shiftWant - view.shift) * (1 - Math.exp(-dt * 4)); moving = true; }
   const look = add(view.target, mul(norm([cam.r[0], 0, cam.r[2]]), view.shift));
   aim(add(look, off), look);
 
+  // What is picked glows (theatre.js): the lines drawn about it, for the stations, checkpoints
+  // and ceilings that do not ask for it themselves.
+  const fn = view.sel && nodes.get(view.sel);
+  THEATRE.focus = fn?.pos && !fn.gone ? fn.pos : null;
+  THEATRE.focusR = 1.6;
   ctx.clearRect(0, 0, W, H);
-  lines(floor.pts, floor.edges, C.dim, 0.35, 1);
+  lines(floor.pts, floor.edges, C.dim, 0.35, 1, { focus: false });
   drawScene(dt);
   updateLabels();
   flushOutput();
-  if (stamp !== shownStamp && view.sel && clock - shownAt > 0.5) renderDetails();
+  const pending = stamp !== shownStamp && view.sel;
+  if (pending && clock - shownAt > 0.5) renderDetails();
+  // Another frame only while something moves: nodes or the camera easing, packets in flight, a
+  // change from the server not yet shown, or the details waiting for their next refresh.
+  return moving || packets.length > 0 || inbox.length > 0 || dirty || !!(stamp !== shownStamp && view.sel);
 }
 
 // A raised arc from a to b, as points.
@@ -1018,7 +1036,7 @@ function drawScene(dt) {
     // A small box on the slab for each VM it runs.
     for (const vk of providerVms(n)) {
       const lit = on || selVm === vk || view.hover === vk || sel?.key === vk;
-      draw(SHAPES.chip, chipAt(n, vk), C.ident, (lit ? 1 : 0.65) * n.alpha, { scale: chipSize(n), width: lit ? 1.4 : 1, glow: lit });
+      draw(SHAPES.chip, chipAt(n, vk), C.ident, (lit ? 1 : 0.65) * n.alpha, { scale: chipSize(n), width: lit ? 1.4 : 1, glow: on || sel?.key === vk });
     }
   }
   for (const n of nodes.values()) if ((n.kind === 'vm' || n.kind === 'gateway') && n.pos && n.obj) {
@@ -1058,7 +1076,7 @@ function drawScene(dt) {
       const a = nodes.get(index().agentOnVm.get(n.key));
       if (a?.obj) {
         const as = stateOf(a.obj);
-        draw(SHAPES.agentCage, add(n.pos, [0, 0.05, 0]), STATE_COLOR[as], 0.9 * n.alpha, { scale: 0.42, ry: live(a.obj) ? t * 0.8 : 0, glow: on });
+        draw(SHAPES.agentCage, add(n.pos, [0, 0.05, 0]), STATE_COLOR[as], 0.9 * n.alpha, { scale: 0.42, glow: on });
       }
     }
   }
@@ -1072,7 +1090,7 @@ function drawScene(dt) {
     const on = sel && (sel.key === n.key || (sel.kind === 'agent' && routesOf(egressOf(sel.obj)).some((r) => r.gateway === n.name)));
     const ready = !n.obj || condOf(n.obj, 'Ready')?.status === 'True';
     draw(SHAPES.gwBig, n.pos, l ? C.carrier : C.wire, (on ? 1 : l ? 0.95 : ready ? 0.75 : 0.3) * n.alpha,
-      { ry: t * (l ? 2.2 : 0.8) + n.pos[1], scale: GW_SCALE * (1 + Math.min(l, 12) * 0.04), width: on ? 2 : l ? 1.6 : 1.2, glow: ready || on, dash: ready ? null : [2, 3] });
+      { ry: n.pos[1], scale: GW_SCALE * (1 + Math.min(l, 12) * 0.04), width: on ? 2 : l ? 1.6 : 1.2, glow: on, dash: ready ? null : [2, 3] });
     if (l) lines([n.pos, add(ST.broker, [0, 1.2, 0])], [[0, 1]], C.ident, 0.12 * n.alpha, 1, { dash: [3, 6] });
   }
   // The circle round the column, turned to face you; brighter while any gateway carries traffic.
@@ -1081,7 +1099,7 @@ function drawScene(dt) {
     const ry = ((gwTier.n - 1) * GW_DY) / 2 + 2.6, rx = Math.max(3.6, ((gwTier.n - 1) * GW_DZ) / 2 + 3);
     const right = norm([cam.r[0], 0, cam.r[2]]), N = 64, pts = [];
     for (let k = 0; k < N; k++) { const a = (k / N) * Math.PI * 2; pts.push(add(c, add(mul(right, Math.cos(a) * rx), [0, Math.sin(a) * ry, 0]))); }
-    lines(pts, chain(N, true), C.wire, gwSel ? 0.85 : busy ? 0.6 + 0.15 * Math.sin(t * 2) : 0.45, gwSel || busy ? 1.4 : 1.1);
+    lines(pts, chain(N, true), C.wire, gwSel ? 0.85 : busy ? 0.68 : 0.45, gwSel || busy ? 1.4 : 1.1);
   }
   // The audiences, east of the gateways: a ring and its diamond, in identity's colour. A line
   // from the column to each one a running agent reached (or names); bright for the one picked,
@@ -1100,7 +1118,7 @@ function drawScene(dt) {
   for (const n of nodes.values()) if (n.kind === 'audience' && n.pos) {
     const on = sel?.key === n.key || view.hover === n.key || selAuds.has(n.name);
     const used = reached.get(n.name) || 0, named = namingAudience(n.name).some((a) => live(a.obj));
-    draw(SHAPES.audience, n.pos, C.ident, (on ? 1 : used || named ? 0.85 : 0.5) * n.alpha, { ry: t * 0.5 + n.pos[0], scale: 1.5, width: on ? 1.8 : 1, glow: on || used > 0 });
+    draw(SHAPES.audience, n.pos, C.ident, (on ? 1 : used || named ? 0.85 : 0.5) * n.alpha, { ry: n.pos[0], scale: 1.5, width: on ? 1.8 : 1, glow: on });
     if (tc && (used || named || on)) {
       const pts = arcPts(tc, n.pos, 1.6, 12);
       lines(pts, chain(pts.length), C.carrier, (on ? 0.8 : used ? 0.45 : 0.18) * n.alpha, on ? 1.5 : 1.1, used ? { glow: false } : { dash: [3, 5], glow: false });
@@ -1145,8 +1163,8 @@ function drawScene(dt) {
     const m = matches(n);
     let a = (st === 'exited' ? 0.45 : st === 'pending' ? 0.6 : 0.85) * n.alpha * (m ? 1 : 0.12);
     if (isSel || hov) a = Math.max(a, 0.95 * n.alpha);
-    draw(SHAPES.agentCage, n.pos, color, a, { width: isSel ? 2 : 1, glow: isSel || (m && st === 'running' && !!view.filter), dash: st === 'pending' ? [3, 4] : null });
-    if (live(n.obj)) draw(SHAPES.agentCore, n.pos, color, a, { ry: t * 1.4 + n.pos[0], rx: 0.4 });
+    draw(SHAPES.agentCage, n.pos, color, a, { width: isSel ? 2 : 1, glow: isSel, dash: st === 'pending' ? [3, 4] : null });
+    if (live(n.obj)) draw(SHAPES.agentCore, n.pos, color, a, { ry: n.pos[0], rx: 0.4 });
     if (st === 'refused') draw(SHAPES.agentCross, n.pos, C.bad, a, { width: 1.6 });
     // One line, to the gateway carrying it (or the row of them, when the broker says only that
     // one checked it); kept, dimmed, for a while after the agent exits.
@@ -1215,7 +1233,7 @@ function drawScene(dt) {
     p.t += dt / p.d;
     if (!from?.pos || !to || p.t >= (p.bad ? 2 : 1)) { packets.splice(i, 1); continue; }
     const tt = p.bad && p.t > 1 ? 2 - p.t : p.t;
-    draw(SHAPES.pkt, arc(add(from.pos, [0, CAGE_TOP, 0]), to, 2.2, clamp(tt)), p.bad ? C.bad : C.carrier, 0.95, { ry: t * 4, glow: true });
+    draw(SHAPES.pkt, arc(add(from.pos, [0, CAGE_TOP, 0]), to, 2.2, clamp(tt)), p.bad ? C.bad : C.carrier, 0.95, { ry: t * 4 });
   }
 }
 
@@ -1666,6 +1684,7 @@ function openOutput(n) {
   es.onmessage = (ev) => {
     let m;
     try { m = JSON.parse(ev.data); } catch { return; }
+    wake();
     if (m.t === 'line') out.pending.push({ stream: m.stream, text: m.text });
     else if (m.t === 'gap') outNote(`[output lost: ${m.stdout} B stdout, ${m.stderr} B stderr]`);
     else if (m.t === 'end') done(`[the stream ended: ${String(m.reason || 'done').replace(/_/g, ' ')}]`);
@@ -1798,7 +1817,11 @@ function bind() {
     // A click picks; a Cmd-click marks or unmarks what it would move.
     if (drag && !drag.moved && e.type === 'pointerup') {
       const key = pickAt(e.clientX, e.clientY);
-      if (markKey(e)) { const n = nodes.get(key); markToggle(n && groupOf(n)); } else select(key);
+      if (markKey(e)) { const n = nodes.get(key); markToggle(n && groupOf(n)); } else {
+        // On nothing (the floor): nothing picked and nothing marked.
+        if (!key) MARK.keys = new Set();
+        select(key);
+      }
     }
     drag = null;
     canvas.classList.remove('dragging');
@@ -1832,7 +1855,7 @@ function connect() {
   const pill = $('live');
   const es = new EventSource('/api/admin');
   es.onopen = () => { pill.textContent = 'live'; pill.className = 'pill ok'; };
-  es.onmessage = (ev) => { try { inbox.push(JSON.parse(ev.data)); } catch { /* a malformed message is dropped */ } };
+  es.onmessage = (ev) => { try { inbox.push(JSON.parse(ev.data)); wake(); } catch { /* a malformed message is dropped */ } };
   // The browser reconnects by itself, and the server answers with the whole picture again.
   es.onerror = () => { pill.textContent = 'reconnecting'; pill.className = 'pill bad'; };
 }
