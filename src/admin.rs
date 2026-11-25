@@ -34,7 +34,7 @@ type SecretMeta = kube::core::PartialObjectMeta<k8s_openapi::api::core::v1::Secr
 use crate::util::str_at;
 
 /// What is watched, cluster-wide: the page's name for it, then group, version, kind, plural.
-const KINDS: [(&str, &str, &str, &str, &str); 10] = [
+const KINDS: [(&str, &str, &str, &str, &str); 11] = [
     (
         "sandbox",
         "mediatore.io",
@@ -55,6 +55,14 @@ const KINDS: [(&str, &str, &str, &str, &str); 10] = [
         "v1alpha2",
         "SandboxPolicy",
         "sandboxpolicies",
+    ),
+    // Each policy's approved maximum (notaio ADR-0007): the same name, in its namespace.
+    (
+        "ceiling",
+        "sandbox.firestoned.io",
+        "v1alpha2",
+        "ExposureCeiling",
+        "exposureceilings",
     ),
     (
         "pool",
@@ -957,11 +965,24 @@ fn demo_static(fleet: &Fleet) {
     .enumerate()
     {
         let obj = json!({"apiVersion": "sandbox.firestoned.io/v1alpha2", "kind": "SandboxPolicy",
-            "metadata": {"name": name, "namespace": ns, "uid": format!("5d0c1b2a-0000-4000-8000-00000000b00{i}"), "creationTimestamp": now()},
-            "spec": {"profileRef": profile, "audiences": DEMO_AUDIENCES.iter()
-                .map(|(name, endpoint)| json!({"name": name, "endpoints": [endpoint]})).collect::<Vec<_>>()},
-            "status": {"bundleVersion": 7 + i, "conditions": [{"type": "Ready", "status": "True", "reason": "Signed"}]}});
+        "metadata": {"name": name, "namespace": ns, "uid": format!("5d0c1b2a-0000-4000-8000-00000000b00{i}"), "creationTimestamp": now()},
+        "spec": {"profileRef": profile, "audiences": DEMO_AUDIENCES.iter()
+            .map(|(name, endpoint)| json!({"name": name, "endpoints": [endpoint]})).collect::<Vec<_>>()},
+        "status": {"bundleVersion": 7 + i, "conditions": [if ns == "research" {
+            json!({"type": "Ready", "status": "False", "reason": "NoApprovedCeiling", "message": "no ExposureCeiling research/lab"})
+        } else {
+            json!({"type": "Ready", "status": "True", "reason": "Published"})
+        }]}});
         fleet.put("policy", format!("policy/{ns}/{name}"), obj);
+        // research/lab has no ceiling: notaio does not publish it (Ready=False, NoApprovedCeiling).
+        if ns != "research" {
+            fleet.put("ceiling", format!("ceiling/{ns}/{name}"), json!({"apiVersion": "sandbox.firestoned.io/v1alpha2", "kind": "ExposureCeiling",
+                "metadata": {"name": name, "namespace": ns, "creationTimestamp": now()},
+                "spec": {"audiences": DEMO_AUDIENCES.iter()
+                    .map(|(name, endpoint)| json!({"name": name, "access": "Read", "maxTtlSeconds": 3600, "endpoints": [endpoint], "dataScope": "Internal"})).collect::<Vec<_>>(),
+                    "egressHosts": [], "tools": [], "maxLeaseSeconds": 28800,
+                    "approvals": [{"role": "Security", "reference": "https://example.com/approvals/1"}]}}));
+        }
         fleet.put("floor", format!("floor/banlieue-system/{ns}.{name}"), json!({"apiVersion": "mediatore.io/v1alpha1", "kind": "PolicyFloor",
             "metadata": {"name": format!("{ns}.{name}"), "namespace": "banlieue-system"},
             "spec": {"policyName": name, "policyNamespace": ns, "uid": format!("5d0c1b2a-0000-4000-8000-00000000b00{i}"), "version": 7 + i}}));

@@ -22,7 +22,9 @@ the places Recess stands things by default; [you can move them](#arranging-the-t
 |---|---|---|---|
 | **OIDC issuer** | violet | Your identity provider (Dex): the login mints your ID token here, with PKCE | AgentSandbox: as you sign in |
 | **Broker** | cyan | mediatore: takes the claim, seals your credentials, answers the guest, decides each gateway credential | the claim is sent |
+| **ExposureCeiling** | orange, above the policy | The policy's approved maximum (notaio ADR-0007), approved by Security; dashed red when there is none, and notaio then does not publish the policy | the policy is read |
 | **SandboxPolicy** | orange | notaio's signed bundle the claim names (`spec.policyRef`): its audiences, lease and egress | the broker reads it for the claim |
+| **Authz shields** | green, amber or red | Where the claim is authorized: the broker's admission, the API's admission and reconciler, the gateway's authorizer; a tick, a cross, or a keyhole while undecided | each decides |
 | **Kubernetes API** | cyan | Holds the `AgentSandbox`, its Events, the VMs and the Secrets; admission (CEL) checks the claim | the `AgentSandbox` is written |
 | **Secrets** | amber | The broker's namespace: one sealed Secret per credential, drawn as a vault of deposit boxes | something is sealed; double-click to open |
 | **OpenBao** | amber | Holds the transit key that seals them, and the PKI that is SPIRE's upstream CA | sealing; its PKI edge shows while SPIRE or OpenBao is picked |
@@ -33,7 +35,7 @@ the places Recess stands things by default; [you can move them](#arranging-the-t
 
 Admin adds, around the same stations: a **plot** per namespace with a cage per agent, the
 **gateways** in one column inside a cyan circle with the **audiences** east of them, the
-**policies** in a row north-west of the gateways, a **rack** per VM pool, and the **providers**
+**policies** in a row north-west of the gateways, each under its ExposureCeiling, a **rack** per VM pool, and the **providers**
 (the hosts the VMs run on) south of the racks.
 
 ## The two views

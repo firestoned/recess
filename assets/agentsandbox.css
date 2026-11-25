@@ -40,6 +40,10 @@ body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); }
   pointer-events: auto; cursor: pointer; padding: 2px 4px; margin: -2px -4px;
 }
 .lbl.sel { outline: 1px solid rgba(219, 231, 245, .5); }
+/* Marking several to move together (theatre.js): the Shift-Cmd square, and what is marked. */
+#marquee { position: fixed; z-index: 5; pointer-events: none; border: 1px dashed var(--wire); background: rgba(94, 231, 255, .07); }
+#marquee[hidden] { display: none; }
+.lbl.marked, .rcard.marked { outline: 1px dashed var(--wire); outline-offset: 2px; }
 .lbl.nopick { pointer-events: none; }
 .lbl b { display: block; color: var(--ink); font-weight: 600; }
 .lbl i { display: block; font-style: normal; text-transform: none; letter-spacing: .02em; color: var(--muted); font-weight: 400; }
@@ -246,6 +250,19 @@ input:disabled, textarea:disabled { color: var(--muted); }
 .linewrap .copy:hover { color: var(--wire); border-color: var(--wire); }
 .linewrap .copy.done { color: var(--ok); border-color: currentColor; opacity: 1; }
 .linewrap .copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+/* The raw (YAML) of a panel: its copy button in the top right corner, as the output's. */
+.yamlwrap { position: relative; }
+.yamlwrap pre { padding-right: 40px; }
+.yamlwrap .copy {
+  position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0;
+  background: var(--glass-strong, rgba(6, 12, 22, .86)); border: 1px solid var(--faint); border-radius: 2px; color: var(--muted);
+  cursor: pointer; opacity: .55; transition: opacity .15s, color .15s, border-color .15s;
+}
+.yamlwrap:hover .copy, .yamlwrap .copy:focus-visible { opacity: 1; }
+.yamlwrap .copy:hover { color: var(--wire); border-color: var(--wire); }
+.yamlwrap .copy.done { color: var(--ok); border-color: currentColor; opacity: 1; }
+.yamlwrap .copy svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+.lbl.missing b, .lbl.policy.missing b { color: var(--bad); }
 
 /* The two cards laid over the wireframe (agentsandbox.js places and scales them every frame): You, a
    rolodex card with your picture and details; the sandbox create, an index card with the

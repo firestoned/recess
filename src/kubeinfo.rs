@@ -432,6 +432,65 @@ pub async fn spire_entries(client: kube::Client, claim_uid: &str) -> anyhow::Res
     Ok(out)
 }
 
+fn notaio_resource(kind: &str, plural: &str) -> ApiResource {
+    ApiResource::from_gvk_with_plural(
+        &GroupVersionKind::gvk("sandbox.firestoned.io", "v1alpha2", kind),
+        plural,
+    )
+}
+
+/// An object as the page shows it: without `managedFields`, which only the API server reads.
+fn trimmed(o: &DynamicObject) -> anyhow::Result<Value> {
+    let mut v = serde_json::to_value(o)?;
+    if let Some(m) = v.get_mut("metadata").and_then(Value::as_object_mut) {
+        m.remove("managedFields");
+    }
+    Ok(v)
+}
+
+/// The notaio `SandboxPolicy` a sandbox runs under, and its `ExposureCeiling` (notaio ADR-0007:
+/// the same name, in the policy's namespace; none fails closed, the policy is not published).
+/// The policy is found by the uid the broker put on the record (it may live in another
+/// namespace than the sandbox, mediatore ADR-0054), else by name in the sandbox's namespace.
+/// `{"object": .., "ceiling": ..}`, each null when there is none.
+///
+/// # Errors
+/// A get or list this kubeconfig may not make.
+pub async fn policy_and_ceiling(
+    client: kube::Client,
+    sandbox_ns: &str,
+    name: &str,
+    uid: &str,
+) -> anyhow::Result<Value> {
+    let pr = notaio_resource("SandboxPolicy", "sandboxpolicies");
+    let mut policy = None;
+    if !uid.is_empty() {
+        let all: kube::Api<DynamicObject> = kube::Api::all_with(client.clone(), &pr);
+        policy = all
+            .list(&ListParams::default())
+            .await?
+            .into_iter()
+            .find(|o| o.metadata.uid.as_deref() == Some(uid));
+    }
+    if policy.is_none() && !name.is_empty() {
+        let api: kube::Api<DynamicObject> =
+            kube::Api::namespaced_with(client.clone(), sandbox_ns, &pr);
+        policy = api.get_opt(name).await?;
+    }
+    let Some(policy) = policy else {
+        return Ok(json!({"object": null, "ceiling": null}));
+    };
+    let ns = policy.metadata.namespace.clone().unwrap_or_default();
+    let pname = policy.metadata.name.clone().unwrap_or_default();
+    let cr = notaio_resource("ExposureCeiling", "exposureceilings");
+    let api: kube::Api<DynamicObject> = kube::Api::namespaced_with(client, &ns, &cr);
+    let ceiling = match api.get_opt(&pname).await? {
+        Some(c) => trimmed(&c)?,
+        None => Value::Null,
+    };
+    Ok(json!({"object": trimmed(&policy)?, "ceiling": ceiling}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

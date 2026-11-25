@@ -61,7 +61,7 @@ const AUD_ROWS = 5, AUD_SX = 16, AUD_DY = 4.2;
 // ------------------------------------------------------------------------------ the data
 
 // Every kind the stream carries, by the server's name for it.
-const KINDS = ['sandbox', 'vm', 'pool', 'policy', 'egress', 'entry', 'envelope', 'segment', 'node', 'floor', 'machine', 'provider', 'host'];
+const KINDS = ['sandbox', 'vm', 'pool', 'policy', 'ceiling', 'egress', 'entry', 'envelope', 'segment', 'node', 'floor', 'machine', 'provider', 'host'];
 const S = Object.fromEntries(KINDS.map((k) => [k, new Map()]));
 S.notes = {};
 const inbox = [];
@@ -153,6 +153,18 @@ function stateOf(o) {
   const gaps = condOf(o, 'PolicyConformant')?.status === 'False';
   if (st.phase === 'Bound' || st.ready) return gaps ? 'gaps' : 'running';
   return gaps ? 'gaps' : 'pending';
+}
+// The policy node an agent runs under: by the uid the broker put on its record (the policy may
+// live in another namespace than the sandbox, mediatore ADR-0054), else by name in the agent's
+// namespace, else the one policy of that name anywhere.
+function policyKeyOf(o) {
+  const uid = at(o, 'status.record.policyUid'), name = at(o, 'spec.policyRef.name');
+  const byUid = uid && index().policyByUid.get(uid);
+  if (byUid) return byUid;
+  if (!name) return null;
+  if (S.policy.has(`policy/${nsOf(o)}/${name}`)) return `policy/${nsOf(o)}/${name}`;
+  const any = [...S.policy.keys()].filter((k) => k.endsWith(`/${name}`));
+  return any.length === 1 ? any[0] : `policy/${nsOf(o)}/${name}`;
 }
 const STATES = ['running', 'pending', 'gaps', 'refused', 'exited'];
 const live = (o) => ['running', 'gaps'].includes(stateOf(o));
@@ -372,7 +384,7 @@ function ago(ts) {
 // namespaces, pools and their VMs. Nodes persist across changes and ease to where the layout
 // puts them; a gone one fades out.
 const nodes = new Map();
-const view = { target: [30, 0, 0], goal: null, yaw: -0.3, pitch: 0.62, dist: 55, sel: null, hover: null, marked: new Set(), idle: 0, filter: '', only: null, shift: 0, touched: false };
+const view = { target: [30, 0, 0], goal: null, yaw: -0.3, pitch: 0.62, dist: 55, sel: null, hover: null, idle: 0, filter: '', only: null, shift: 0, touched: false };
 const SP = 3.6; // between cages on a plot
 const CAGE_TOP = 0.85; // half a cage: where its lines leave from
 let fit = { center: [30, 0, 0], dist: 55 };
@@ -400,6 +412,9 @@ function groupOf(n) {
   if (n.kind === 'pool') return `yard/${nsOf(n.obj)}`;
   if (n.kind === 'gateway') return 'gateways';
   if (n.kind === 'audience') return 'audiences';
+  // A ceiling goes with its policy; a checkpoint with the station it stands on.
+  if (n.kind === 'ceiling') return `policy/${n.key.slice(8)}`;
+  if (n.kind === 'authz') return { 'authz-broker': 'broker', 'authz-api': 'api', 'authz-gw': 'gateways' }[n.key];
   return BASE_AT.has(n.key) || ['ns', 'yard', 'policy', 'provider'].includes(n.kind) ? n.key : null;
 }
 const offsetOf = (key) => LAYOUT.moved[key] || [0, 0, 0];
@@ -411,7 +426,7 @@ function moveGroup(key, d) {
   layout();
   for (const n of nodes.values()) if (n.pos && groupOf(n) === key) n.pos = n.goal.slice();
 }
-// Several groups by the same d, with one layout: what a Shift-Cmd marquee marked.
+// Several groups by the same d, with one layout: what was marked (theatre.js).
 function moveGroups(keys, d) {
   for (const key of keys) {
     if (BASE_AT.has(key)) shiftPoints([BASE_AT.get(key)], d);
@@ -424,7 +439,7 @@ function moveGroups(keys, d) {
 function holdNode(e, n, flat) {
   const key = n && groupOf(n);
   if (!key) return;
-  const keys = view.marked.has(key) ? new Set(view.marked) : null;
+  const keys = MARK.keys.has(key) ? new Set(MARK.keys) : null;
   const shift = keys ? (d) => { view.idle = 0; moveGroups(keys, d); } : (d) => { view.idle = 0; moveGroup(key, d); };
   if (takeHold(e, key, n.pos, flat, shift, true)) view.touched = true;
 }
@@ -613,6 +628,24 @@ function layout() {
     n.goal = add([gwWest - 7 - (pols.length - 1 - i) * POLICY_SP, 8, polZ], offsetOf(key));
     seen.add(key);
   });
+  // Each policy's ExposureCeiling above it (notaio ADR-0007), there or not: one missing is why
+  // notaio does not publish the policy.
+  for (const [key, o] of pols) {
+    const ck = `ceiling/${key.slice(7)}`;
+    const n = node(ck, 'ceiling');
+    n.obj = S.ceiling.get(ck) || null; n.policy = key; n.name = nameOf(o);
+    n.goal = add(nodes.get(key).goal, [0, CEILING_DY, 0]);
+    seen.add(ck);
+  }
+  // The authorization checkpoints, as AgentSandbox stands them: over the broker and the API,
+  // and under the gateways' circle.
+  for (const [key, at0] of [['authz-broker', add(ST.broker, [0, 2.9, 0])], ['authz-api', add(ST.api, [0, 2.4, 0])],
+    ['authz-gw', gwNames.length ? add(tierAt, [0, -(((gwNames.length - 1) * GW_DY) / 2 + 2.6 + 1.6), 0]) : null]]) {
+    if (!at0) continue;
+    const n = node(key, 'authz');
+    n.goal = at0;
+    seen.add(key);
+  }
   const polWest = pols.length ? gwWest - 7 - (pols.length - 1) * POLICY_SP : Infinity;
   for (const [key, n] of nodes) if (!seen.has(key) && !n.gone) n.gone = true;
   // The frame: from the broker to the fleet's east edge, the gateways to SPIRE or the racks' end.
@@ -623,6 +656,24 @@ function layout() {
 }
 
 const agents = () => [...nodes.values()].filter((n) => n.kind === 'agent');
+const namingPolicy = (key) => agents().filter((a) => !a.gone && policyKeyOf(a.obj) === key);
+// What each checkpoint has decided across the fleet, as far as the cluster shows it. A claim the
+// broker refuses writes nothing, so the broker's shows only the claims it took; the API's, the
+// reconciler's refusals and gaps; the gateway's, the tunnels it allowed and denied.
+function authzFleet() {
+  const as = agents().filter((a) => !a.gone);
+  const n = (st) => as.filter((a) => stateOf(a.obj) === st).length;
+  let allow = 0, deny = 0;
+  for (const a of as) for (const r of egressOf(a.obj)?.e.routes || []) { if (r.verdict === 'deny') deny++; else allow++; }
+  const refused = n('refused'), gaps = n('gaps');
+  return {
+    'authz-broker': { name: 'Claim admission', state: as.length ? 'ok' : 'pending', counts: [['claims taken', as.length || '']] },
+    'authz-api': { name: 'Admission and reconcile', state: refused ? 'bad' : gaps ? 'gaps' : as.length ? 'ok' : 'pending', counts: [['refused', refused || ''], ['with gaps (shadow)', gaps || ''], ['conformant', as.length - refused - gaps || '']] },
+    'authz-gw': { name: 'Gateway authorizer', state: deny ? 'gaps' : allow ? 'ok' : 'pending', counts: [['routes allowed', allow || ''], ['routes denied', deny || '']] },
+  };
+}
+// Whether a policy has a signed bundle (notaio published it).
+const published = (o) => at(o, 'status.bundleVersion') != null && condOf(o, 'Ready')?.status !== 'False';
 const gatewayNode = (g) => nodes.get(`gw/${g}`);
 function matches(n) {
   if (view.only && stateOf(n.obj) !== view.only) return false;
@@ -664,7 +715,10 @@ function label(n, cls) {
   el.append(b, i);
   // A click picks it; with Ctrl or Option, a press takes hold of what it names, as on the
   // canvas: a namespace's plot with its agents, a yard (or a pool in it) with its racks and VMs.
-  el.addEventListener('click', (e) => { if (!moveKey(e)) select(n.key); });
+  el.addEventListener('click', (e) => {
+    if (markKey(e)) markToggle(groupOf(n));
+    else if (!moveKey(e)) select(n.key);
+  });
   el.addEventListener('pointerdown', (e) => {
     if (HAND.m || !moveKey(e) || !n.pos) return;
     if (!groupOf(n)) return;
@@ -695,8 +749,8 @@ function placeLabel(l, p, show, alpha = 1, under = false) {
   l.el.style.opacity = String(clamp(fog(c[2]) * 1.2 * alpha, 0.25, 1));
   l.el.style.pointerEvents = '';
   l.el.classList.toggle('sel', view.sel === l.key);
-  const ln = view.marked.size && nodes.get(l.key);
-  l.el.classList.toggle('marked', !!ln && view.marked.has(groupOf(ln)));
+  const ln = MARK.keys.size && nodes.get(l.key);
+  l.el.classList.toggle('marked', !!ln && MARK.keys.has(groupOf(ln)));
   l.el.classList.toggle('under', under);
   l.shown = true;
 }
@@ -762,11 +816,23 @@ function updateLabels() {
       const np = n.info.policies.length, na = namingAudience(n.name).filter((a) => live(a.obj)).length;
       setLabel(n.label, n.name, [np ? `${np} polic${np === 1 ? 'y' : 'ies'}` : 'no policy grants it', na ? `${na} agent${na === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · '));
       placeLabel(n.label, add(n.pos, [1.4, 0.4, 0]), !n.gone, n.alpha);
+    } else if (n.kind === 'ceiling') {
+      if (!n.label) n.label = label(n, 'policy');
+      n.label.key = n.key;
+      setLabel(n.label, 'ceiling', n.obj ? (at(n.obj, 'spec.approvals') || []).map((a) => a.role).join(', ') || 'no approval' : 'none', n.obj ? 'policy' : 'policy missing');
+      placeLabel(n.label, add(n.pos, [1.4, 0.35, 0]), !n.gone, n.alpha * 0.9);
+    } else if (n.kind === 'authz') {
+      if (!n.label) n.label = label(n, 'authz');
+      n.label.key = n.key;
+      const f = authzFleet()[n.key];
+      setLabel(n.label, `authz · ${f.name}`, f.counts.filter(([, v]) => v !== '').map(([k, v]) => `${v} ${k}`).join(' · '), `authz ${f.state}`);
+      // Beside the broker's and the API's own labels: named only up close, or hovered or picked.
+      placeLabel(n.label, add(n.pos, [0.6, 0.35, 0]), !n.gone && (view.dist < 40 || view.sel === n.key || view.hover === n.key), n.alpha);
     } else if (n.kind === 'policy') {
       if (!n.label) n.label = label(n, 'policy');
       n.label.key = n.key;
-      // The name only; the kind and the bundle are in its panel, a click away.
-      setLabel(n.label, nameOf(n.obj), '');
+      // The name only, and whether notaio published it; the rest is in its panel, a click away.
+      setLabel(n.label, nameOf(n.obj), published(n.obj) ? '' : 'not published');
       placeLabel(n.label, add(n.pos, [0, -1.35, 0]), !n.gone, n.alpha, true);
     } else if (n.kind === 'ns') {
       if (!n.label) n.label = label(n, 'ns');
@@ -1043,9 +1109,29 @@ function drawScene(dt) {
   // Policies: a signed sheet, turned to face you.
   for (const n of nodes.values()) if (n.kind === 'policy' && n.pos) {
     const d = sub(cam.pos, n.pos);
-    const on = sel && (sel.key === n.key || (sel.kind === 'agent' && nsOf(sel.obj) === nsOf(n.obj) && at(sel.obj, 'spec.policyRef.name') === nameOf(n.obj)));
+    const on = sel && (sel.key === n.key || sel.key === `ceiling/${n.key.slice(7)}` || (sel.kind === 'agent' && policyKeyOf(sel.obj) === n.key));
     draw(SHAPES.policyDoc, n.pos, C.policy, (on ? 1 : 0.6) * n.alpha, { ry: Math.atan2(d[0], d[2]), width: on ? 1.8 : 1, glow: on });
   }
+  // Each policy's ceiling over it, and where the policies reach (as AgentSandbox draws it): each
+  // published one's bundle to the broker's admission; to the reconciler, those agents run under;
+  // the broker to the gateways' authorizer, which asks it for each claim's allowlist.
+  const az = Object.fromEntries(['authz-broker', 'authz-api', 'authz-gw'].map((k) => [k, nodes.get(k)]));
+  for (const n of nodes.values()) if (n.kind === 'ceiling' && n.pos && !n.gone) {
+    drawCeiling(n.pos, !!n.obj, n.alpha, t, sel?.key === n.key || sel?.key === n.policy);
+  }
+  for (const n of nodes.values()) if (n.kind === 'policy' && n.pos && !n.gone) {
+    const on = sel && (sel.key === n.key || sel.key === 'authz-broker' || sel.key === 'authz-api' || (sel.kind === 'agent' && policyKeyOf(sel.obj) === n.key));
+    const b = az['authz-broker'];
+    if (b?.pos && published(n.obj)) lines(arcPts(add(n.pos, [0, -1.2, 0]), add(b.pos, [0, 0.6, 0]), 2, 14), chain(15), C.policy, (on ? 0.7 : 0.22) * n.alpha, on ? 1.4 : 1, { glow: false });
+    const a = az['authz-api'], used = namingPolicy(n.key).length > 0;
+    if (a?.pos && (used || on)) lines(arcPts(add(n.pos, [0.6, -1.1, 0]), add(a.pos, [0, 0.6, 0]), 3, 16), chain(17), C.policy, (on ? 0.6 : 0.2) * n.alpha, on ? 1.3 : 1, { dash: [3, 4], glow: false });
+  }
+  if (az['authz-gw']?.pos) {
+    const on = sel?.key === 'authz-gw' || sel?.key === 'broker';
+    lines(arcPts(add(ST.broker, [0.8, 0.9, 0]), add(az['authz-gw'].pos, [0, 0.6, 0]), 6, 24), chain(25), C.wire, on ? 0.6 : 0.2, on ? 1.3 : 1, { dash: [3, 4], glow: false });
+  }
+  const fleetAuthz = authzFleet();
+  for (const [k, n] of Object.entries(az)) if (n?.pos && !n.gone) drawShield(n.pos, fleetAuthz[k].state, sel?.key === k);
   // Agents. Their carrier lines thin out as they multiply, so the city stays readable.
   const carrying = agents().filter((n) => !n.gone && live(n.obj)).length;
   const tier = tierPos();
@@ -1080,7 +1166,7 @@ function drawScene(dt) {
       if (envelopesOf(n.obj).length) ties.push([C.seal, arcPts(add(ST.bao, [0, 1.5, 0]), top, 3, 16), [2, 5]]);
       const vk = vmKeyOf(n.obj), v = vk && nodes.get(vk);
       if (v?.pos) ties.push([C.wire, arcPts(add(n.pos, [0, -CAGE_TOP, 0]), add(v.pos, [0, 0.3, 0]), 1.5, 12), [3, 4]]);
-      const pn = nodes.get(`policy/${nsOf(n.obj)}/${at(n.obj, 'spec.policyRef.name')}`);
+      const pn = nodes.get(policyKeyOf(n.obj));
       if (pn?.pos) ties.push([C.policy, [top, add(pn.pos, [0, -1.05, 0])], [4, 5]]);
       for (const [col, pts, dash] of ties) {
         if (isSel) lines(pts, chain(pts.length), col, 0.8, 1.3, dash ? { dash } : {});
@@ -1103,7 +1189,7 @@ function drawScene(dt) {
     }
   }
   if (sel?.kind === 'policy') {
-    for (const a of agents()) if (!a.gone && nsOf(a.obj) === nsOf(sel.obj) && at(a.obj, 'spec.policyRef.name') === nameOf(sel.obj)) {
+    for (const a of agents()) if (!a.gone && policyKeyOf(a.obj) === sel.key) {
       lines([add(sel.pos, [0, -1.05, 0]), add(a.pos, [0, CAGE_TOP, 0])], [[0, 1]], C.policy, 0.35, 1, { dash: [4, 5] });
     }
   }
@@ -1162,7 +1248,7 @@ function paintBar() {
   $('cap-notes').hidden = !notes.length;
   $('cap-notes').textContent = notes.join(' · ');
 }
-const KIND_NAME = { sandbox: 'AgentSandboxes', vm: 'VirtualMachines', pool: 'VirtualMachinePools', policy: 'SandboxPolicies', egress: 'gateway decisions', entry: 'SPIRE entries', envelope: 'sealed Secrets', segment: 'sealed output', node: 'SandboxNodes', floor: 'PolicyFloors', machine: 'LibvirtMachines', provider: 'Providers', host: 'faubourg Hosts', cluster: 'cluster' };
+const KIND_NAME = { sandbox: 'AgentSandboxes', vm: 'VirtualMachines', pool: 'VirtualMachinePools', policy: 'SandboxPolicies', ceiling: 'ExposureCeilings', egress: 'gateway decisions', entry: 'SPIRE entries', envelope: 'sealed Secrets', segment: 'sealed output', node: 'SandboxNodes', floor: 'PolicyFloors', machine: 'LibvirtMachines', provider: 'Providers', host: 'faubourg Hosts', cluster: 'cluster' };
 
 // ------------------------------------------------------------------------------ the details
 
@@ -1191,7 +1277,7 @@ function raw(title, obj) {
   d.open = rawOpen;
   d.addEventListener('toggle', () => { rawOpen = d.open; });
   const { 'x-recess': _derived, ...own } = obj || {};
-  d.append(el('summary', null, title), el('pre', null, toYaml(own)));
+  d.append(el('summary', null, title), yamlBlock(own));
   return d;
 }
 const note = (text) => el('p', 'note', text);
@@ -1250,7 +1336,7 @@ const PANELS = {
   agent: (n) => {
     const o = n.obj, st = stateOf(o), s = o.status || {};
     const pol = at(o, 'spec.policyRef.name');
-    const pk = `policy/${nsOf(o)}/${pol}`;
+    const pk = policyKeyOf(o);
     const conf = condOf(o, 'PolicyConformant');
     const exit = at(s, 'record.exit');
     const vk = vmKeyOf(o);
@@ -1409,7 +1495,7 @@ const PANELS = {
 
   policy: (n) => {
     const o = n.obj;
-    const naming = agents().filter((a) => !a.gone && nsOf(a.obj) === nsOf(o) && at(a.obj, 'spec.policyRef.name') === nameOf(o));
+    const naming = namingPolicy(n.key);
     const ready = condOf(o, 'Ready');
     return [el('div', 'kicker', `${nsOf(o)} · SandboxPolicy`), el('h2', null, nameOf(o)),
       el('p', 'lede', 'notaio signs it into a bundle; the broker verifies the bundle and admits claims that name it.'),
@@ -1417,11 +1503,47 @@ const PANELS = {
         ['profile', at(o, 'spec.profileRef')],
         ['bundle', at(o, 'status.bundleVersion')],
         ['ready', ready ? `${ready.status} (${ready.reason || ''})` : ''],
+        ['ceiling', (() => { const ck = `ceiling/${n.key.slice(7)}`; return S.ceiling.has(ck) ? pick(ck, `${nameOf(o)} · approved`) : 'none: notaio does not publish it'; })()],
         ['named by', `${naming.length} agent(s) on screen`],
         ['with gaps', naming.filter((a) => stateOf(a.obj) === 'gaps').length || ''],
       ]), el('h3', null, 'Agents naming it'),
       agentList(naming, (a) => `${stateOf(a.obj)} · ${at(a.obj, 'spec.subject.display') || ''}`),
       raw('raw (YAML)', o)];
+  },
+
+  ceiling: (n) => {
+    const o = n.obj, sp = o?.spec || {};
+    const head = [el('div', 'kicker', `${n.key.split('/')[1]} · ExposureCeiling`), el('h2', null, n.name),
+      el('p', 'lede', 'The approved maximum exposure of the policy of the same name (notaio ADR-0007). notaio signs the policy only while it fits inside it; Security approves each change to it.')];
+    if (!o) {
+      return [...head, dl([['policy', pick(n.policy, n.name)], ['ceiling', 'none in the namespace'], ['so', 'notaio does not publish the policy: Ready=False, NoApprovedCeiling. A sandbox naming it is refused, or runs with gaps in shadow.']])];
+    }
+    return [...head,
+      dl([
+        ['policy', pick(n.policy, n.name)],
+        ['audiences', (sp.audiences || []).map((a) => `${a.name} (${a.access || '?'}, ${a.maxTtlSeconds ?? '?'}s)`).join(', ') || 'none'],
+        ['egress hosts', (sp.egressHosts || []).join(', ') || 'none'],
+        ['tools', (sp.tools || []).map((t) => t.name || t).join(', ') || 'none'],
+        ['max lease', sp.maxLeaseSeconds != null ? `${sp.maxLeaseSeconds}s` : ''],
+        ['approvals', (sp.approvals || []).map((a) => `${a.role}${a.reference ? ' · ' + a.reference : ''}`).join('; ') || 'none'],
+      ]),
+      raw('raw (YAML)', o)];
+  },
+
+  authz: (n) => {
+    const f = authzFleet()[n.key];
+    const said = { ok: 'allowing', bad: 'refusing some', gaps: n.key === 'authz-gw' ? 'denying some routes' : 'allowing, some with gaps (shadow)', pending: 'nothing decided yet' };
+    const checks = AUTHZ_CHECKS.filter((c) => c.at === n.key);
+    const ul = el('ul', 'checks');
+    for (const c of checks) {
+      const li = el('li');
+      li.append(el('b', null, c.what), el('span', null, ` · on refusal: ${c.how}${c.unseen ? ' (not reported here)' : ''}`));
+      ul.append(li);
+    }
+    return [el('div', 'kicker', `${AUTHZ_WHERE[n.key]} · authorization`), el('h2', null, `Authz: ${f.name}`),
+      el('p', 'lede', AUTHZ_SAYS[n.key]),
+      dl([['across the fleet', said[f.state]], ...f.counts]),
+      el('h3', null, 'The checks here, in order'), ul];
   },
 
   yard: (n) => {
@@ -1629,11 +1751,7 @@ function pickAt(x, y) {
 }
 
 function bind() {
-  let drag = null, box = null;
-  const marquee = document.createElement('div');
-  marquee.id = 'marquee';
-  marquee.hidden = true;
-  document.body.append(marquee);
+  let drag = null;
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
     // A node in hand is let go by the window; Ctrl or Alt takes one (the layout, theatre.js).
@@ -1643,14 +1761,8 @@ function bind() {
       holdNode(e, n, !!n && (n.kind === 'agent' || n.kind === 'vm'));
       return;
     }
-    // Shift-Cmd-drag: a square that marks every group with a node inside it; a click clears.
-    if (e.shiftKey && e.metaKey && LAYOUT.editable) {
-      box = { x: e.clientX, y: e.clientY };
-      marquee.style.cssText = `left:${e.clientX}px;top:${e.clientY}px;width:0;height:0`;
-      marquee.hidden = false;
-      canvas.setPointerCapture(e.pointerId);
-      return;
-    }
+    // Shift-Cmd-drag: a square that marks every group with a node inside it (theatre.js).
+    if (markBegin(e)) return;
     drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, target: view.target.slice(), pan: e.button === 2 || e.shiftKey || e.metaKey, moved: false };
     canvas.setPointerCapture(e.pointerId);
     canvas.classList.add('dragging');
@@ -1658,11 +1770,7 @@ function bind() {
   });
   canvas.addEventListener('pointermove', (e) => {
     if (HAND.m) return;
-    if (box) {
-      const x = Math.min(box.x, e.clientX), y = Math.min(box.y, e.clientY);
-      marquee.style.cssText = `left:${x}px;top:${y}px;width:${Math.abs(e.clientX - box.x)}px;height:${Math.abs(e.clientY - box.y)}px`;
-      return;
-    }
+    if (markMove(e)) return;
     if (!drag) {
       view.hover = pickAt(e.clientX, e.clientY);
       canvas.classList.toggle('pick', !!view.hover);
@@ -1683,26 +1791,15 @@ function bind() {
     }
   });
   const end = (e) => {
-    if (box) {
-      const r = canvas.getBoundingClientRect();
-      const x0 = Math.min(box.x, e.clientX) - r.left, x1 = Math.max(box.x, e.clientX) - r.left;
-      const y0 = Math.min(box.y, e.clientY) - r.top, y1 = Math.max(box.y, e.clientY) - r.top;
-      view.marked = new Set();
-      if (e.type === 'pointerup' && x1 - x0 > 4 && y1 - y0 > 4) {
-        for (const n of nodes.values()) {
-          if (n.gone || !n.pos || (n.kind === 'agent' && !matches(n))) continue;
-          const key = groupOf(n), c = toCam(n.pos);
-          if (!key || c[2] <= NEAR) continue;
-          const [px, py] = proj(c);
-          if (px >= x0 && px <= x1 && py >= y0 && py <= y1) view.marked.add(key);
-        }
-      }
-      box = null;
-      marquee.hidden = true;
-      dirty = true;
-      return;
+    const inside = (x0, y0, x1, y1) => [...nodes.values()]
+      .filter((n) => !n.gone && n.pos && !(n.kind === 'agent' && !matches(n)) && groupOf(n) && inSquare(n.pos, x0, y0, x1, y1))
+      .map(groupOf);
+    if (markEnd(e, inside)) return;
+    // A click picks; a Cmd-click marks or unmarks what it would move.
+    if (drag && !drag.moved && e.type === 'pointerup') {
+      const key = pickAt(e.clientX, e.clientY);
+      if (markKey(e)) { const n = nodes.get(key); markToggle(n && groupOf(n)); } else select(key);
     }
-    if (drag && !drag.moved && e.type === 'pointerup') select(pickAt(e.clientX, e.clientY));
     drag = null;
     canvas.classList.remove('dragging');
   };
@@ -1720,7 +1817,7 @@ function bind() {
   }, { passive: false });
   document.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, select') || e.metaKey || e.ctrlKey) return;
-    if (e.key === 'Escape') { select(null); view.marked = new Set(); view.touched = false; dirty = true; }
+    if (e.key === 'Escape') { select(null); view.touched = false; dirty = true; }
     else if (e.key === '/') { e.preventDefault(); $('filter').focus(); }
   });
   $('insp-close').addEventListener('click', () => select(null));
