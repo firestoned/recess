@@ -280,8 +280,21 @@ groups left out), are each listed and watched across all namespaces: with your k
 your machine, with your own ID token when Recess is shared behind Dex, so the API server applies
 your RBAC. A kind you may not list cluster-wide is named on the page and tried again at the next
 discovery, every three minutes, which is also when a newly installed CRD appears. Secrets are
-never asked for. Each kind is one watch, so a cluster with many CRDs holds as many open watches
+listed as metadata only, and one is read only when you open its drawer. Each kind is one watch, so a cluster with many CRDs holds as many open watches
 while the page is open.
+
+A room with Secrets has a vault in its east column, as the Secrets vault in AgentSandbox: amber
+when your RBAC lets you read Secrets there, red when it does not (the API server's own answer to
+a SelfSubjectAccessReview for `get secrets` in that namespace), cyan while it is being asked.
+Click it and it rises, its door swings open, and inside is a wall of safety deposit boxes, one
+per Secret. The wall is drawn from metadata only: the Secrets are watched through the metadata
+API, which returns no data, and their last-applied annotation (which holds the data of a Secret
+applied with kubectl) is dropped. Click a box and its drawer slides out. If you may read it, it
+opens: the Secret is read then, with your credentials, and shows its type and its keys with their
+sizes, standing in the drawer as cards. A value is read and shown only when you press Show beside
+its key, and forgotten when you hide it or pick anything else; neither Recess nor the browser
+caches it (`Cache-Control: no-store`). A drawer you may not open stays shut, red, with the API
+server's refusal. Esc steps back from a box to its vault.
 
 Rooms can be moved and the layout kept, as in the other 3D views (Ctrl- or Option-drag a room
 or anything in it): see [Arranging the theatre](#arranging-the-theatre).

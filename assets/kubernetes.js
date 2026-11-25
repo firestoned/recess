@@ -7,6 +7,10 @@
 // resources behind them on shelves, one shelf per kind. Click a pod and it rises out of its
 // room and opens, with its containers inside, each one clickable; the details panel shows it
 // from the outside in, as AgentSandbox shows the jail: the node, the pod, each container.
+// Each room with Secrets has a vault, as AgentSandbox's: click it and its door swings open on a
+// wall of safety deposit boxes, one per Secret (listed as metadata only). Click a box and its
+// drawer slides out; when your RBAC lets you read Secrets there, it opens on the Secret's keys,
+// and a value is shown only when you ask for it. A locked drawer is red.
 //
 // What is shown is what the viewer's own credentials may list, across all namespaces: a kind
 // they may not read is named in the caption. Read-only. The data is one server-sent event
@@ -26,6 +30,8 @@ Object.assign(SHAPES, {
   })(),
   // A container in an open pod: a unit box with its process inside.
   ctr: merge(box(1, 1, 1), octa(0.3)),
+  // A Secret's key in an open drawer: a card standing in it.
+  keyCard: { pts: [[-0.5, 0, 0], [0.5, 0, 0], [0.5, 1, 0], [-0.5, 1, 0]], edges: chain(4, true) },
   // A custom resource: a sheet with a folded corner and its fields.
   crDoc: merge(
     { pts: [[-0.8, 1.05, 0], [0.5, 1.05, 0], [0.8, 0.75, 0], [0.8, -1.05, 0], [-0.8, -1.05, 0]], edges: chain(5, true) },
@@ -48,10 +54,16 @@ const NS_H = 2.2; // a room's walls
 const NS_GAP = 0.8; // between the pods and the shelves
 const KIND_H = 1.4; // a shelf's room for its kind's name
 const NS_FOOT = 0.6;
+// A room's vault: its column beside the pods and shelves, and how it opens (as a pod does).
+const VAULT_W = 2.8;
+const VAULT_Y = FLOOR_Y + 0.8;
+const VAULT_OPEN_SCALE = 2.6;
+const VAULT_LIFT = 3.0;
+const MAX_BOX = 64; // boxes drawn in one vault; the rest are listed in its details
 const PLATE_PAD = 5; // round the rooms, before the room to spare
-// The plate is this much bigger each way than what is on it (half as big again), so a room has
-// somewhere to be moved to.
-const PLATE_SPARE = 1.5;
+// The plate is this much bigger each way than what is on it (15% more), so a room has
+// somewhere to be moved to; it follows the rooms, so one moved past its edge grows it again.
+const PLATE_SPARE = 1.15;
 
 const POD_STATES = ['running', 'unready', 'pending', 'failing', 'succeeded', 'terminating'];
 const POD_COLOR = { running: C.wire, unready: C.seal, pending: C.muted, failing: C.bad, succeeded: C.ok, terminating: C.dim };
@@ -60,7 +72,8 @@ const CR_COLOR = { ok: C.ok, bad: C.bad, unknown: C.ident };
 
 // ------------------------------------------------------------------------------ the data
 
-const S = { ns: new Map(), pod: new Map(), crd: new Map(), cr: new Map(), notes: {} };
+const S = { ns: new Map(), pod: new Map(), crd: new Map(), cr: new Map(), secret: new Map(), notes: {} };
+const STORES = () => [S.ns, S.pod, S.crd, S.cr, S.secret];
 const inbox = [];
 let dirty = true;
 let stamp = 0; // bumped on each applied change, so open details re-render
@@ -70,16 +83,17 @@ function storeOf(kind) {
   if (kind === 'namespace') return S.ns;
   if (kind === 'pod') return S.pod;
   if (kind === 'crd') return S.crd;
+  if (kind === 'secret') return S.secret;
   if (String(kind).startsWith('cr:')) return S.cr;
   return null;
 }
 function apply(m) {
   if (m.op === 'snapshot') {
-    for (const st of [S.ns, S.pod, S.crd, S.cr]) st.clear();
+    for (const st of STORES()) st.clear();
     S.notes = { ...(m.notes || {}) };
     for (const it of m.items || []) storeOf(it.kind)?.set(it.key, it.obj);
   } else if (m.op === 'put') storeOf(m.kind)?.set(m.key, m.obj);
-  else if (m.op === 'del') { for (const st of [S.ns, S.pod, S.crd, S.cr]) st.delete(m.key); }
+  else if (m.op === 'del') { for (const st of STORES()) st.delete(m.key); }
   else if (m.op === 'note') { if (m.text) S.notes[m.kind] = m.text; else delete S.notes[m.kind]; }
   dirty = true; stamp++;
 }
@@ -147,6 +161,66 @@ function crState(o) {
   return 'unknown';
 }
 const kindOf = (o) => o?.kind || '?';
+
+// Whether you may read Secrets in a namespace, as the API server answers for you (a
+// SelfSubjectAccessReview): true, false, or absent while not yet asked. Asked a few at a time.
+const ACCESS = new Map();
+const accessQueue = [];
+let accessBusy = 0;
+function askAccess(ns) {
+  if (ACCESS.has(ns) || accessQueue.includes(ns)) return;
+  accessQueue.push(ns);
+  pumpAccess();
+}
+function pumpAccess() {
+  while (accessBusy < 4 && accessQueue.length) {
+    const ns = accessQueue.shift();
+    accessBusy++;
+    fetch(`/api/kubernetes/access?ns=${encodeURIComponent(ns)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (j) ACCESS.set(ns, !!j.read); })
+      .catch(() => {})
+      .finally(() => { accessBusy--; stamp++; wake(); pumpAccess(); });
+  }
+}
+// The drawer pulled open: one Secret at a time, its keys, and the values you asked to see. It
+// lives only while that box is picked; picking another, or none, empties it.
+const DRAWER = { id: '', state: '', msg: '', data: null, values: new Map() };
+function closeDrawer() { Object.assign(DRAWER, { id: '', state: '', msg: '', data: null, values: new Map() }); }
+async function readDrawer(ns, name, key = null) {
+  const id = `${ns}/${name}`;
+  const q = new URLSearchParams({ ns, name });
+  if (key) q.set('key', key);
+  let r, j = null;
+  try { r = await fetch(`/api/kubernetes/secret?${q}`, { cache: 'no-store' }); j = await r.json().catch(() => null); } catch { r = null; }
+  if (DRAWER.id !== id) return; // another box was picked meanwhile
+  if (!r || !r.ok) {
+    const msg = j?.error || (r ? `HTTP ${r.status}` : 'no answer from Recess');
+    if (key) DRAWER.values.set(key, { error: msg });
+    else Object.assign(DRAWER, { state: r?.status === 403 ? 'refused' : 'error', msg });
+  } else if (key) DRAWER.values.set(key, j);
+  else Object.assign(DRAWER, { state: 'open', data: j });
+  stamp++; wake(400);
+}
+function pullDrawer(ns, name) {
+  const id = `${ns}/${name}`;
+  if (DRAWER.id === id) return;
+  closeDrawer();
+  DRAWER.id = id;
+  if (ACCESS.get(ns) === false) { DRAWER.state = 'locked'; return; }
+  DRAWER.state = 'loading';
+  readDrawer(ns, name);
+}
+// How a box stands: open (its keys read), refused or locked (red), readable, or not yet known.
+function boxState(ns, name) {
+  if (DRAWER.id === `${ns}/${name}`) {
+    if (DRAWER.state === 'open') return 'open';
+    if (DRAWER.state === 'refused' || DRAWER.state === 'locked') return 'locked';
+  }
+  const a = ACCESS.get(ns);
+  return a === true ? 'readable' : a === false ? 'locked' : 'unknown';
+}
+const BOX_COLOR = { open: C.ink, readable: C.seal, locked: C.bad, unknown: C.wire };
 const apiGroupOf = (o) => String(o?.apiVersion || '').split('/').slice(0, -1).join('/') || 'core';
 
 // ------------------------------------------------------------------------------ the scene's nodes
@@ -154,7 +228,7 @@ const apiGroupOf = (o) => String(o?.apiVersion || '').split('/').slice(0, -1).jo
 // What can be picked: the API, the namespaces' rooms, pods and custom resources. Nodes persist
 // across changes and ease to where the layout puts them; a gone one fades out.
 const nodes = new Map();
-const view = { target: [0, 0, 0], goal: null, yaw: -0.25, pitch: 0.7, dist: 60, sel: null, ctr: null, hover: null, hoverCtr: null, filter: '', only: null, shift: 0, touched: false };
+const view = { target: [0, 0, 0], goal: null, yaw: -0.25, pitch: 0.7, dist: 60, sel: null, part: null, hover: null, hoverPart: null, filter: '', only: null, shift: 0, touched: false };
 let fit = { center: [0, 0, 0], dist: 60 };
 const PLATE = { x0: -12, x1: 12, z0: -12, z1: 12, grid: { pts: [], edges: [] } };
 let byUid = new Map(); // metadata.uid -> node key, for the owner references
@@ -172,7 +246,7 @@ function node(key, kind) {
 // What a Ctrl-drag moves (the layout, theatre.js): a namespace's room, with all in it.
 function groupOfNode(n) {
   if (!n) return null;
-  if (n.kind === 'pod' || n.kind === 'cr') return `ns/${n.ns}`;
+  if (n.kind === 'pod' || n.kind === 'cr' || n.kind === 'vault') return `ns/${n.ns}`;
   if (n.kind === 'ns') return n.key;
   return null;
 }
@@ -216,8 +290,10 @@ function layout() {
   const names = new Set([...S.ns.values()].map(nameOf));
   for (const o of S.pod.values()) names.add(nsOf(o));
   for (const o of S.cr.values()) names.add(nsOf(o));
+  for (const o of S.secret.values()) names.add(nsOf(o));
   names.delete('');
-  const byNs = new Map([...names].map((n) => [n, { pods: [], crs: new Map() }]));
+  const byNs = new Map([...names].map((n) => [n, { pods: [], crs: new Map(), secrets: [] }]));
+  for (const [k, o] of S.secret) byNs.get(nsOf(o))?.secrets.push([k, o]);
   for (const [k, o] of S.pod) byNs.get(nsOf(o))?.pods.push([k, o]);
   for (const [k, o] of S.cr) {
     const b = byNs.get(nsOf(o));
@@ -245,8 +321,10 @@ function layout() {
       return s;
     });
     const podD = rows * PSP;
-    const d = NS_PAD + podD + (podD && crD ? NS_GAP : 0) + crD + NS_PAD + NS_FOOT;
-    rooms.push({ ns, pods: b.pods, cols, shelves, perRow, podD, w: innerW + 2 * NS_PAD, d, x0: 0, z0: 0, crZ: 0 });
+    b.secrets.sort((x, y) => x[0].localeCompare(y[0]));
+    const vw = b.secrets.length ? VAULT_W : 0;
+    const d = Math.max(NS_PAD + podD + (podD && crD ? NS_GAP : 0) + crD + NS_PAD + NS_FOOT, vw ? 2 * NS_PAD + 2 + NS_FOOT : 0);
+    rooms.push({ ns, pods: b.pods, cols, shelves, perRow, podD, secrets: b.secrets, innerW, w: innerW + vw + 2 * NS_PAD, d, x0: 0, z0: 0, crZ: 0 });
   }
   pack(rooms, 3.2);
   for (const r of rooms) { const o = offsetOf(`ns/${r.ns}`); r.x0 += o[0]; r.z0 += o[2]; }
@@ -264,6 +342,14 @@ function layout() {
       seen.add(k);
       if (at(o, 'metadata.uid')) byUid.set(o.metadata.uid, k);
     });
+    // The vault, in its column on the room's east side, toward the front.
+    if (r.secrets.length) {
+      const vk = `vault/${r.ns}`, v = node(vk, 'vault');
+      v.ns = r.ns; v.info = r;
+      v.goal = [r.x0 + NS_PAD + r.innerW + VAULT_W - 0.9, VAULT_Y, r.z0 + NS_PAD + 1.0];
+      seen.add(vk);
+      askAccess(r.ns);
+    }
     r.crZ = r.z0 + NS_PAD + r.podD + (r.podD && r.shelves.length ? NS_GAP : 0);
     for (const s of r.shelves) {
       s.z = r.crZ + s.dz;
@@ -311,13 +397,14 @@ function matches(n) {
     return hay.some((s) => String(s || '').toLowerCase().includes(f));
   }
   if (n.kind === 'cr') return [nameOf(o), nsOf(o), kindOf(o), o?.apiVersion].some((s) => String(s || '').toLowerCase().includes(f));
+  if (n.kind === 'vault') return n.ns.toLowerCase().includes(f) || 'secrets'.includes(f) || n.info.secrets.some(([, x]) => nameOf(x).toLowerCase().includes(f));
   return true;
 }
 // Whether a room holds anything that matches (a filter set, or a state picked).
 function roomMatches(n) {
   if (!view.filter && !view.only) return true;
   if (!view.only && matches(n)) return true;
-  for (const m of nodes.values()) if ((m.kind === 'pod' || m.kind === 'cr') && m.ns === n.ns && !m.gone && matches(m)) return true;
+  for (const m of nodes.values()) if ((m.kind === 'pod' || m.kind === 'cr' || m.kind === 'vault') && m.ns === n.ns && !m.gone && matches(m)) return true;
   return false;
 }
 
@@ -334,6 +421,34 @@ function ctrPlaces(n) {
   return list.map((c, i) => {
     const x = (i % cols - (cols - 1) / 2) * cell, y = ((rows - 1) / 2 - Math.floor(i / cols)) * cell;
     return { c, at: add(p, rotY([x, y, 0], face)), size, face };
+  });
+}
+
+// A vault rises and grows as it opens, turning to face you; local points to the world.
+const vaultCentre = (n) => add(n.pos, [0, n.open * VAULT_LIFT, 0]);
+const vaultScale = (n) => 1 + (VAULT_OPEN_SCALE - 1) * ease(n.open);
+function vaultFace(n) {
+  const c = vaultCentre(n);
+  return ease(n.open) * Math.atan2(cam.pos[0] - c[0], cam.pos[2] - c[2]);
+}
+const vaultAt = (n, p) => add(rotY(mul(p, vaultScale(n)), vaultFace(n)), vaultCentre(n));
+// The boxes on the wall inside, as AgentSandbox lays them out: a square-ish grid.
+function boxGrid(count, i) {
+  const k = Math.max(1, Math.min(count, MAX_BOX)), cols = Math.ceil(Math.sqrt(k)), rows = Math.ceil(k / cols);
+  const cw = 1.3 / cols, rh = 1.3 / rows, c = i % cols, r = Math.floor(i / cols);
+  return { x: -0.65 + cw * (c + 0.5), y: 0.65 - rh * (r + 0.5), w: cw * 0.84, h: rh * 0.62 };
+}
+// How far a drawer is out: well out once picked (further once open), a little on hover.
+function boxSlide(n, name) {
+  if (view.sel === n.key && view.part === name) return DRAWER.state === 'open' ? 0.9 : 0.55;
+  return view.sel === n.key && view.hoverPart === name ? 0.18 : 0;
+}
+// Each shown box's name, its grid cell and where its front is in the world.
+function boxPlaces(n) {
+  const list = n.info.secrets.slice(0, MAX_BOX);
+  return list.map(([, o], i) => {
+    const g = boxGrid(list.length, i), name = nameOf(o);
+    return { name, o, g, front: vaultAt(n, [g.x, g.y, -0.3 + boxSlide(n, name) + 0.05]) };
   });
 }
 
@@ -422,7 +537,7 @@ function updateLabels() {
       if (!n.label) n.label = label(n.key, 'kns');
       const r = n.info, ph = at(n.obj, 'status.phase');
       const crs = r.shelves.reduce((s, x) => s + x.list.length, 0);
-      setLabel(n.label, n.ns, [plural(r.pods.length, 'pod'), crs ? plural(crs, 'resource') : '', n.obj ? '' : 'not listed'].filter(Boolean).join(' · '), ph === 'Terminating' ? 'kns terminating' : 'kns');
+      setLabel(n.label, n.ns, [plural(r.pods.length, 'pod'), crs ? plural(crs, 'resource') : '', r.secrets.length ? plural(r.secrets.length, 'Secret') : '', n.obj ? '' : 'not listed'].filter(Boolean).join(' · '), ph === 'Terminating' ? 'kns terminating' : 'kns');
       placeLabel(n.label, n.pos && [r.x0 + r.w / 2, FLOOR_Y, r.z0 + r.d], visible(n) && roomMatches(n), n.alpha, true, view.sel === n.key);
       // Each shelf's kind, while the room is close.
       const close = closeNs.has(n.ns);
@@ -441,7 +556,13 @@ function updateLabels() {
       setLabel(n.label, nameOf(n.obj), `${ready}/${cs.length} ready${restarts ? ` · ${plural(restarts, 'restart')}` : ''} · ${st}`, `pod ${st}`);
       // Beside a closed cage; centred over an open one, clear of its containers' names.
       const open = n.open > 0.5;
-      placeLabel(n.label, n.pos && add(podAt(n), open ? [0, 0.85 * podScale(n) + 0.5, 0] : [0.5 * podScale(n), 0.4 * podScale(n), 0]), show, n.alpha, open, view.sel === n.key && !view.ctr);
+      placeLabel(n.label, n.pos && add(podAt(n), open ? [0, 0.85 * podScale(n) + 0.5, 0] : [0.5 * podScale(n), 0.4 * podScale(n), 0]), show, n.alpha, open, view.sel === n.key && !view.part);
+    } else if (n.kind === 'vault') {
+      if (!n.label) n.label = label(n.key, 'vault');
+      const a = ACCESS.get(n.ns), cnt = n.info.secrets.length;
+      setLabel(n.label, 'Secrets', `${plural(cnt, 'box', 'boxes')}${a === false ? ' · locked' : a === true ? ' · readable' : ''}`, `vault${a === false ? ' locked' : a === true ? ' readable' : ''}`);
+      const show = visible(n) && matches(n) && (n.open > 0.5 || closeNs.has(n.ns) || view.hover === n.key || view.sel === n.key);
+      placeLabel(n.label, n.pos && add(vaultCentre(n), [0, -0.85 * vaultScale(n) - 0.1, 0]), show, n.alpha, true, view.sel === n.key && !view.part);
     } else if (n.kind === 'cr') {
       const show = visible(n) && matches(n) && (view.sel === n.key || view.hover === n.key || (nearSet.has(n.key) && view.dist < 30) || fewMatches.has(n.key));
       if (!n.label && !show) continue;
@@ -451,13 +572,24 @@ function updateLabels() {
       placeLabel(n.label, n.pos && add(n.pos, [0.3, 0.3, 0]), show, n.alpha, false, view.sel === n.key);
     }
   }
+  // The open vault's boxes: every one when few, else the picked and hovered.
+  if (sel?.kind === 'vault' && sel.open > 0.5 && sel.pos) {
+    const places = boxPlaces(sel), all = places.length <= 24;
+    for (const { name, front, g } of places) {
+      if (!all && view.part !== name && view.hoverPart !== name) continue;
+      const l = extraLabel(`box/${sel.ns}/${name}`, 'box', () => select(sel.key, name));
+      const st = boxState(sel.ns, name);
+      setLabel(l, name, st === 'open' ? `${plural(DRAWER.data?.keys?.length || 0, 'key')}` : st === 'locked' ? 'locked' : '', `box ${st}`);
+      placeLabel(l, add(front, [g.w * vaultScale(sel) * 0.5, 0, 0]), true, sel.open, false, view.part === name);
+    }
+  }
   // The open pod's containers.
   if (sel?.kind === 'pod' && sel.open > 0.5 && sel.pos) {
     for (const { c, at: p, size } of ctrPlaces(sel)) {
       const l = extraLabel(`ctr/${sel.key}/${c.name}`, 'ctr', () => select(sel.key, c.name));
       const st = ctrState(c);
       setLabel(l, `${c.init ? 'init · ' : ''}${c.name}`, shortImage(c.spec.image), `ctr ${c.init ? 'init' : st}`);
-      placeLabel(l, add(p, [size * 0.6, size * 0.5, 0]), true, sel.open, false, view.ctr === c.name);
+      placeLabel(l, add(p, [size * 0.6, size * 0.5, 0]), true, sel.open, false, view.part === c.name);
     }
   }
   for (const [k, l] of extraLabels) if (!l.used) { l.el.remove(); extraLabels.delete(k); }
@@ -486,7 +618,7 @@ function frame(now) {
     else { n.pos = mix(n.pos, n.goal, REDUCED ? 1 : k); moving = true; }
     const alpha = n.gone ? Math.max(0, n.alpha - dt * 1.2) : Math.min(1, n.alpha + dt * 1.5);
     if (alpha !== n.alpha) { n.alpha = alpha; moving = true; }
-    if (n.kind === 'pod') {
+    if (n.kind === 'pod' || n.kind === 'vault') {
       const want = view.sel === key && !n.gone ? 1 : 0;
       if (Math.abs(want - n.open) < 0.005) n.open = want;
       else { n.open += (want - n.open) * (REDUCED ? 1 : 1 - Math.exp(-dt * 5)); moving = true; }
@@ -507,8 +639,8 @@ function frame(now) {
   aim(add(look, off), look);
 
   const fn = view.sel && nodes.get(view.sel);
-  THEATRE.focus = fn?.pos && !fn.gone && fn.kind !== 'ns' ? (fn.kind === 'pod' ? podAt(fn) : fn.pos) : null;
-  THEATRE.focusR = fn?.kind === 'pod' ? 1.9 * podScale(fn) : 1.4;
+  THEATRE.focus = fn?.pos && !fn.gone && fn.kind !== 'ns' ? (fn.kind === 'pod' ? podAt(fn) : fn.kind === 'vault' ? vaultCentre(fn) : fn.pos) : null;
+  THEATRE.focusR = fn?.kind === 'pod' ? 1.9 * podScale(fn) : fn?.kind === 'vault' ? 1.2 * vaultScale(fn) : 1.4;
   ctx.clearRect(0, 0, W, H);
   drawScene();
   updateLabels();
@@ -580,7 +712,7 @@ function drawScene() {
         lines(place(SHAPES.podCage, n.pos, { scale: POD_SCALE }), SHAPES.podCage.edges, POD_COLOR[st], 0.18 * n.open, 1, { dash: [2, 4], focus: false });
         lines([add(p, [0, -0.85 * s, 0]), add(n.pos, [0, 0.85 * POD_SCALE, 0])], [[0, 1]], POD_COLOR[st], 0.5 * n.open, 1, { dash: [3, 4], focus: false });
         for (const { c, at: cp, size, face: f } of ctrPlaces(n)) {
-          const cs = ctrState(c), picked = view.ctr === c.name, hov = view.hoverCtr === c.name;
+          const cs = ctrState(c), picked = view.part === c.name, hov = view.hoverPart === c.name;
           draw(SHAPES.ctr, cp, CTR_COLOR[cs], n.open * (c.init ? 0.55 : picked || hov ? 1 : 0.85),
             { scale: size * (picked ? 1.15 : 1), ry: f, width: picked || hov ? 1.8 : 1.2, glow: picked || hov, dash: c.init || cs === 'waiting' ? [2, 3] : null });
         }
@@ -588,6 +720,7 @@ function drawScene() {
     } else batched(n.ns, POD_COLOR[st], a, SHAPES.podCage, n.pos, { scale: POD_SCALE, dash });
   }
   flushBatches();
+  for (const n of nodes.values()) if (n.kind === 'vault' && n.pos) drawVault(n);
 
   // What the picked thing owns, and what owns it, where both are on the plate.
   if (sel && (sel.kind === 'pod' || sel.kind === 'cr') && sel.pos) {
@@ -599,6 +732,54 @@ function drawScene() {
       const to = o.kind === 'pod' ? podAt(o) : o.pos;
       const pts = arcPts(from, to, 1.5 + len(sub(from, to)) * 0.15);
       polyline(pts, C.ident, 0.7, 1.2, { dash: [3, 4], focus: false });
+    }
+  }
+}
+
+// A room's vault, as AgentSandbox draws its own: the body, the door hinged on its left edge with
+// its dial, and once open the wall of safety deposit boxes, one per Secret, each with a handle.
+// Amber when you may read its Secrets, red when you may not, cyan while that is not known.
+function drawVault(n) {
+  const acc = ACCESS.get(n.ns), on = view.sel === n.key || view.hover === n.key;
+  const vc = acc === true ? C.seal : acc === false ? C.bad : C.wire;
+  const a = (matches(n) ? (on ? 1 : 0.75) : 0.1) * n.alpha;
+  const at0 = (p) => vaultAt(n, p);
+  const body = box(1.5, 1.5, 1.5);
+  lines(body.pts.map(at0), body.edges, vc, a, on ? 1.4 : 1, { dash: acc === false ? [3, 3] : null });
+  // While it rose, a ghost where it stands, and the line it rose along.
+  if (n.open > 0.001) {
+    lines(body.pts.map((p) => add(p, n.pos)), body.edges, vc, 0.15 * n.open, 1, { dash: [2, 4], focus: false });
+    lines([add(vaultCentre(n), [0, -0.75 * vaultScale(n), 0]), add(n.pos, [0, 0.75, 0])], [[0, 1]], vc, 0.45 * n.open, 1, { dash: [3, 4], focus: false });
+  }
+  const swing = -ease(n.open) * 1.95, hinge = [-0.75, 0, 0.76];
+  const door = (p) => at0(add(hinge, rotY(sub(p, hinge), swing)));
+  const plate = [[-0.75, -0.75, 0.76], [0.75, -0.75, 0.76], [0.75, 0.75, 0.76], [-0.75, 0.75, 0.76]];
+  lines(plate.map(door), chain(4, true), vc, a, 1.1);
+  for (const [r, k] of [[0.42, 24], [0.12, 12]]) {
+    const rr = ringPts(r, k, 'xy').map((p) => add(p, [0, 0, 0.77]));
+    lines(rr.map(door), chain(k, true), vc, a * 0.9, 1);
+  }
+  const spokes = [0, 1, 2].flatMap((k) => { const ang = k * 2.09 + n.open * 6; return [[0, 0, 0.77], [Math.cos(ang) * 0.42, Math.sin(ang) * 0.42, 0.77]]; });
+  lines(spokes.map(door), [[0, 1], [2, 3], [4, 5]], vc, a * 0.8, 1, { glow: false });
+  if (n.open < 0.15) return;
+  const va = clamp((n.open - 0.15) / 0.6) * n.alpha;
+  for (const { name, g } of boxPlaces(n)) {
+    const z = -0.3 + boxSlide(n, name), st = boxState(n.ns, name), picked = view.part === name;
+    const x0 = g.x - g.w / 2, x1 = g.x + g.w / 2, y0 = g.y - g.h / 2, y1 = g.y + g.h / 2;
+    const pts = [[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z], [x0, y0, -0.6], [x1, y0, -0.6], [x1, y1, -0.6], [x0, y1, -0.6],
+      [g.x - g.w * 0.15, g.y, z + 0.01], [g.x + g.w * 0.15, g.y, z + 0.01]];
+    const edges = [[0, 1], [1, 2], [2, 3], [3, 0], [0, 4], [1, 5], [2, 6], [3, 7], [8, 9]];
+    lines(pts.map(at0), edges, BOX_COLOR[st], va * (picked || view.hoverPart === name ? 1 : 0.8), picked ? 1.6 : 1.1,
+      { glow: picked, dash: st === 'locked' ? [2, 3] : null });
+    // An open drawer: its keys stand in it as cards, one per key (eight at most).
+    if (picked && st === 'open') {
+      const keys = (DRAWER.data?.keys || []).slice(0, 8), m = keys.length;
+      keys.forEach((_, i) => {
+        const kz = z - 0.08 - (i * 0.4) / Math.max(1, m);
+        const cw = g.w * 0.7, ch = g.h * 0.75;
+        const card = SHAPES.keyCard.pts.map(([x, y]) => [g.x + x * cw, y0 + 0.02 + y * ch, kz]);
+        lines(card.map(at0), SHAPES.keyCard.edges, C.seal, va, 1.2, { glow: true });
+      });
     }
   }
 }
@@ -623,10 +804,11 @@ function paintBar() {
   const nNs = new Set([...S.ns.values()].map(nameOf)).size;
   const ctrs = [...S.pod.values()].reduce((s, o) => s + (at(o, 'spec.containers') || []).length, 0);
   const kindsWith = new Set([...S.cr.values()].map(kindOf)).size;
-  $('cap-detail').textContent = `${plural(nNs, 'namespace')} · ${plural(S.pod.size, 'pod')}, ${plural(ctrs, 'container')} · ${plural(S.cr.size, 'custom resource')} of ${plural(kindsWith, 'kind')} (${S.crd.size} discovered)`;
+  $('cap-detail').textContent = `${plural(nNs, 'namespace')} · ${plural(S.pod.size, 'pod')}, ${plural(ctrs, 'container')} · ${plural(S.cr.size, 'custom resource')} of ${plural(kindsWith, 'kind')} (${S.crd.size} discovered) · ${plural(S.secret.size, 'Secret')}`;
   // What could not be read: the cluster-wide kinds by name, the custom ones counted.
   const notes = [];
-  for (const k of ['cluster', 'namespace', 'pod']) if (S.notes[k]) notes.push(`${k === 'cluster' ? 'cluster' : k === 'pod' ? 'Pods' : 'Namespaces'}: ${S.notes[k]}`);
+  const NOTE_NAME = { cluster: 'cluster', namespace: 'Namespaces', pod: 'Pods', secret: 'Secrets' };
+  for (const k of Object.keys(NOTE_NAME)) if (S.notes[k]) notes.push(`${NOTE_NAME[k]}: ${S.notes[k]}`);
   const refused = Object.keys(S.notes).filter((k) => k.startsWith('cr:'));
   if (refused.length) notes.push(`${plural(refused.length, 'custom resource kind')} not readable (the API's details list them)`);
   $('cap-notes').hidden = !notes.length;
@@ -739,7 +921,87 @@ function layerBox(name, sub, rows, inner = [], opts = {}) {
   return b;
 }
 
+// What the drawer of a picked box shows: locked, being pulled, refused, or open on its keys,
+// each value behind its own button and dropped when the box is let go.
+function drawerSection(ns, name) {
+  const out = [el('h3', null, 'The drawer')];
+  const st = DRAWER.state;
+  if (st === 'locked') out.push(note(`Locked: your RBAC does not allow get on Secrets in ${ns}, so this drawer stays shut.`));
+  else if (st === 'loading') out.push(note('Pulling it open…'));
+  else if (st === 'refused') out.push(note(`Refused by the API server: ${DRAWER.msg}`));
+  else if (st === 'error') out.push(note(`Could not be read: ${DRAWER.msg}`));
+  else if (st === 'open') {
+    const d = DRAWER.data || {};
+    out.push(dl([['type', d.type], ['immutable', d.immutable ? 'yes' : 'no'], ['keys', String((d.keys || []).length)]]));
+    out.push(note('Read just now with your own credentials. A value is fetched only when you show it, and forgotten when you pick something else.'));
+    const t = el('table', 'routes keys');
+    const h = el('tr');
+    for (const c of ['key', 'size', '']) h.append(el('th', null, c));
+    t.append(h);
+    for (const k of d.keys || []) {
+      const tr = el('tr'), act = el('td', 'n');
+      const shownV = DRAWER.values.get(k.name);
+      const b = el('button', 'ghost small', shownV ? 'Hide' : 'Show');
+      b.type = 'button';
+      b.addEventListener('click', () => {
+        if (DRAWER.values.has(k.name)) DRAWER.values.delete(k.name);
+        else { DRAWER.values.set(k.name, { loading: true }); readDrawer(ns, name, k.name); }
+        stamp++; renderDetails();
+      });
+      act.append(b);
+      tr.append(el('td', null, k.name), el('td', 'n', `${k.bytes} B${k.text ? '' : ' (binary)'}`), act);
+      t.append(tr);
+      if (shownV) {
+        const vr = el('tr'), vd = el('td');
+        vd.colSpan = 3;
+        if (shownV.loading) vd.append(note('reading…'));
+        else if (shownV.error) vd.append(note(shownV.error));
+        else {
+          // In the raw blocks' box, so its copy button sits in the corner as theirs does.
+          const wrap = el('div', 'yamlwrap');
+          wrap.append(el('pre', 'secret-value', shownV.value), copyButton(() => shownV.value, 'value'));
+          vd.append(wrap);
+          if (!shownV.text) vd.append(note('Not UTF-8: shown as base64.'));
+        }
+        vr.append(vd);
+        t.append(vr);
+      }
+    }
+    if (!(d.keys || []).length) out.push(note('It holds no keys.'));
+    else out.push(t);
+  }
+  return out;
+}
+const annotationNames = (o) => Object.keys(at(o, 'metadata.annotations') || {});
+
 const PANELS = {
+  vault: (n) => {
+    const acc = ACCESS.get(n.ns), list = n.info.secrets;
+    const box = view.part && list.find(([, o]) => nameOf(o) === view.part);
+    if (box) {
+      const o = box[1], st = boxState(n.ns, view.part);
+      return [kicker(nsPick(n.ns), pickLink(n.key, 'Secrets vault'), 'Secret', el('span', `st-${st === 'locked' ? 'bad' : st === 'open' ? 'ok' : 'unknown'}`, st)),
+        el('h2', null, nameOf(o)),
+        dl([['created', created(o)], ['owner', owners(o)], ['labels', chips(at(o, 'metadata.labels'))],
+          ['annotations', annotationNames(o).join(', ')]]),
+        ...drawerSection(n.ns, view.part),
+        raw('Raw (metadata only)', o)];
+    }
+    const out = [kicker(nsPick(n.ns), 'Secrets vault', el('span', acc === true ? 'st-ok' : acc === false ? 'st-bad' : 'st-unknown', acc === true ? 'readable' : acc === false ? 'locked' : 'checking')),
+      el('h2', null, `Secrets in ${n.ns}`),
+      el('p', 'lede', 'Each Secret a safety deposit box. The wall is drawn from metadata only; a drawer opens when you click its box, read then with your own credentials.'),
+      dl([['boxes', `${list.length}${list.length > MAX_BOX ? ` (${MAX_BOX} on the wall)` : ''}`],
+        ['your access', acc === true ? 'get allowed: drawers open' : acc === false ? 'get not allowed: drawers stay shut' : 'asking the API server']]),
+      el('h3', null, `Boxes (${list.length})`)];
+    const ul = el('ul');
+    for (const [, o] of list.slice(0, 500)) {
+      const li = el('li');
+      li.append(pickLink(n.key, nameOf(o), nameOf(o)), el('span', 'sub', [at(o, 'metadata.annotations')?.['kubernetes.io/service-account.name'] ? `service account ${o.metadata.annotations['kubernetes.io/service-account.name']}` : '', (at(o, 'metadata.ownerReferences') || []).map((r) => `${r.kind}/${r.name}`).join(', '), ago(at(o, 'metadata.creationTimestamp')) ? `${ago(at(o, 'metadata.creationTimestamp'))} old` : ''].filter(Boolean).join(' · ')));
+      ul.append(li);
+    }
+    out.push(ul);
+    return out;
+  },
   api: () => {
     const refused = Object.entries(S.notes).filter(([k]) => k.startsWith('cr:'));
     const kinds = [...S.crd.values()].sort((a, b) => `${a.group}/${a.kind}`.localeCompare(`${b.group}/${b.kind}`));
@@ -749,7 +1011,8 @@ const PANELS = {
       el('p', 'lede', 'Everything here was listed and watched with your own credentials, across all namespaces. What your RBAC does not allow is named, not shown.'),
       dl([['as', CLUSTER_INFO.user], ['namespaces', [...nodes.values()].filter((n) => n.kind === 'ns' && !n.gone).length], ['pods', S.pod.size],
         ['custom kinds', `${S.crd.size} discovered, ${new Set([...S.cr.values()].map(kindOf)).size} with objects`], ['custom resources', S.cr.size],
-        ['discovery', S.notes.cluster || 'ok'], ['Namespaces', S.notes.namespace || 'readable'], ['Pods', S.notes.pod || 'readable']])];
+        ['discovery', S.notes.cluster || 'ok'], ['Namespaces', S.notes.namespace || 'readable'], ['Pods', S.notes.pod || 'readable'],
+        ['Secrets', S.notes.secret || `${S.secret.size} listed, as metadata only`]])];
     if (refused.length) {
       out.push(el('h3', null, `Not readable (${refused.length})`));
       const ul = el('ul');
@@ -780,6 +1043,11 @@ const PANELS = {
         ['pods', POD_STATES.filter((s) => counts[s]).map((s) => `${counts[s]} ${s}`).join(', ') || 'none'],
         ['labels', chips(at(o, 'metadata.labels'))]])];
     if (!o) out.push(note('This namespace was not listed (your RBAC may not allow listing namespaces); it is here because objects in it were.'));
+    if (r.secrets.length) {
+      const h = el('h3', null, 'Secrets ');
+      h.append(pickLink(`vault/${n.ns}`, `the vault, ${plural(r.secrets.length, 'box', 'boxes')}`));
+      out.push(h);
+    }
     out.push(el('h3', null, `Pods (${r.pods.length})`));
     const ul = el('ul');
     for (const [k, p] of r.pods.slice(0, 300)) {
@@ -801,7 +1069,7 @@ const PANELS = {
     const o = n.obj, s = o.status || {}, st = podState(o), all = containersOf(o);
     const cs = all.filter((c) => !c.init), ready = cs.filter((c) => c.st?.ready).length;
     const restarts = all.reduce((x, c) => x + (c.st?.restartCount || 0), 0);
-    const picked = view.ctr && all.find((c) => c.name === view.ctr);
+    const picked = view.part && all.find((c) => c.name === view.part);
     const out = [];
     if (picked) {
       const cst = ctrState(picked);
@@ -884,17 +1152,22 @@ function renderDetails() {
 
 // ------------------------------------------------------------------------------ selection and input
 
-function select(key, ctr = null) {
+// Pick a node, and a part of it: a pod's container, or a vault's box (whose drawer is then
+// pulled open). Whatever drawer was open is emptied when the box picked changes.
+function select(key, part = null) {
   const was = view.sel;
   view.sel = key && nodes.has(key) ? key : null;
-  view.ctr = view.sel && ctr ? ctr : null;
+  view.part = view.sel && part ? part : null;
   if (view.sel) view.touched = true;
   const n = view.sel && nodes.get(view.sel);
+  if (n?.kind === 'vault' && view.part) pullDrawer(n.ns, view.part);
+  else closeDrawer();
   if (n && was !== view.sel) {
     // Framed: a room whole, a pod risen with its containers, the API with the plate.
     if (n.kind === 'ns') { view.goal = [n.info.x0 + n.info.w / 2, 0, n.info.z0 + n.info.d / 2]; view.dist = clamp(Math.max(n.info.w, n.info.d) * 1.5, 14, 90); }
     else if (n.kind === 'pod') { view.goal = add(n.goal, [0, OPEN_LIFT * 0.85, 0]); view.dist = 16; }
     else if (n.kind === 'cr') { view.goal = n.goal.slice(); view.dist = 10; }
+    else if (n.kind === 'vault') { view.goal = add(n.goal, [0, VAULT_LIFT * 0.9, 0]); view.dist = 19; askAccess(n.ns); }
     else if (n.kind === 'api') { view.goal = fit.center; view.dist = fit.dist; }
   }
   $('details').scrollTop = 0;
@@ -902,8 +1175,8 @@ function select(key, ctr = null) {
   wake(400);
 }
 
-// What is under (x, y): an open pod's container first, then the nearest pod, resource or the
-// API on screen, then the room whose floor is there.
+// What is under (x, y): an open pod's container or an open vault's box first, then the nearest
+// pod, resource, vault or the API on screen, then the room whose floor is there.
 function pickAt(x, y) {
   const sel = view.sel && nodes.get(view.sel);
   if (sel?.kind === 'pod' && sel.open > 0.5) {
@@ -916,15 +1189,26 @@ function pickAt(x, y) {
     }
     if (best) return { key: sel.key, ctr: best };
   }
+  if (sel?.kind === 'vault' && sel.open > 0.5) {
+    let best = null, bd = 22;
+    for (const { name, front } of boxPlaces(sel)) {
+      const cc = toCam(front);
+      if (cc[2] <= NEAR) continue;
+      const [px, py] = proj(cc), d = Math.hypot(px - x, py - y);
+      if (d < bd) { bd = d; best = name; }
+    }
+    if (best) return { key: sel.key, ctr: best };
+  }
   // Within 24 px of its middle; an open pod, being larger, within 60.
   let best = null;
   for (const n of nodes.values()) {
     if (n.gone || !n.pos || n.kind === 'ns') continue;
-    if ((n.kind === 'pod' || n.kind === 'cr') && !matches(n)) continue;
-    const c = toCam(n.kind === 'pod' ? podAt(n) : n.pos);
+    if ((n.kind === 'pod' || n.kind === 'cr' || n.kind === 'vault') && !matches(n)) continue;
+    const c = toCam(n.kind === 'pod' ? podAt(n) : n.kind === 'vault' ? vaultCentre(n) : n.pos);
     if (c[2] <= NEAR) continue;
     const [px, py] = proj(c), d = Math.hypot(px - x, py - y);
-    if (d < (n.kind === 'pod' && n.open > 0.5 ? 60 : 24) && (!best || d < best.d)) best = { key: n.key, d };
+    const reach = n.open > 0.5 ? (n.kind === 'vault' ? 90 : 60) : 24;
+    if (d < reach && (!best || d < best.d)) best = { key: n.key, d };
   }
   if (best) return { key: best.key, ctr: null };
   const hit = rayHit(x, y, [0, FLOOR_Y, 0], false);
@@ -959,7 +1243,7 @@ function bind() {
     if (!drag) {
       const p = pickAt(e.clientX, e.clientY);
       view.hover = p && !p.ctr ? p.key : null;
-      view.hoverCtr = p?.ctr || null;
+      view.hoverPart = p?.ctr || null;
       canvas.classList.toggle('pick', !!p);
       canvas.classList.toggle('movable', moveKey(e) && !!p && !!groupOfNode(nodes.get(p.key)));
       return;
@@ -1005,9 +1289,9 @@ function bind() {
   }, { passive: false });
   document.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, select') || e.metaKey || e.ctrlKey) return;
-    // Esc steps out: from a container to its pod, from the pod to the whole cluster.
+    // Esc steps out: from a container to its pod (a box to its vault), then to the cluster.
     if (e.key === 'Escape') {
-      if (view.ctr) select(view.sel, null);
+      if (view.part) select(view.sel, null);
       else { select(null); view.touched = false; dirty = true; }
     } else if (e.key === '/') { e.preventDefault(); $('filter').focus(); }
   });

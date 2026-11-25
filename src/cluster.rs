@@ -8,7 +8,12 @@
 //!
 //! Each kind is listed and watched across all namespaces, as the person: a kind their RBAC does
 //! not let them list cluster-wide is named on the page (and tried again at the next discovery),
-//! never read with anyone else's access. Read-only throughout, and Secrets are never asked for.
+//! never read with anyone else's access. Read-only throughout.
+//!
+//! Secrets are watched as metadata only (the metadata API returns no data), the safety deposit
+//! boxes of each namespace's vault. A drawer is opened only when the person asks, one Secret at
+//! a time ([`open_secret`]): its keys and sizes, then a value only when one is asked for, each a
+//! read made with their own credentials, so their RBAC decides; nothing of it is kept here.
 //!
 //! The picture is kept in an [`admin::Fleet`](crate::admin::Fleet), the store the Admin view
 //! uses: the whole of it, then each change, over one server-sent event stream.
@@ -24,6 +29,9 @@ use kube::discovery::{Discovery, Scope, verbs};
 use kube::runtime::{WatchStreamExt as _, watcher};
 use serde_json::{Value, json};
 use tokio::task::{AbortHandle, JoinSet};
+
+use k8s_openapi::api::core::v1::Secret;
+use kube::core::PartialObjectMeta;
 
 use crate::admin::Fleet;
 use crate::util::str_at;
@@ -88,6 +96,7 @@ async fn run(fleet: Arc<Fleet>, client: kube::Client) {
         let api = kube::Api::all_with(client.clone(), &ar);
         tasks.spawn(watch(fleet.clone(), api, ar, kind.to_owned()));
     }
+    tasks.spawn(watch_secrets(fleet.clone(), kube::Api::all(client.clone())));
     let mut running: HashMap<String, AbortHandle> = HashMap::new();
     loop {
         // Watches that ended (refused, or their kind gone) leave the map, so the next round
@@ -247,7 +256,321 @@ async fn watch(fleet: Arc<Fleet>, api: kube::Api<DynamicObject>, ar: ApiResource
     }
 }
 
+// ------------------------------------------------------------------------------ the vaults
+
+type SecretMeta = PartialObjectMeta<Secret>;
+
+/// A Secret as the page gets it: its metadata, without its managed fields and last-applied copy
+/// (which, for a Secret applied with kubectl, holds its data).
+fn secret_keyed(m: &SecretMeta) -> (String, Value) {
+    let mut v = json!({"metadata": serde_json::to_value(&m.metadata).unwrap_or_default()});
+    if let Some(md) = v.pointer_mut("/metadata").and_then(Value::as_object_mut) {
+        md.remove("managedFields");
+    }
+    if let Some(a) = v
+        .pointer_mut("/metadata/annotations")
+        .and_then(Value::as_object_mut)
+    {
+        a.remove("kubectl.kubernetes.io/last-applied-configuration");
+    }
+    v["kind"] = json!("Secret");
+    v["apiVersion"] = json!("v1");
+    let key = format!(
+        "secret/{}/{}",
+        str_at(&v, "/metadata/namespace"),
+        str_at(&v, "/metadata/name")
+    );
+    (key, v)
+}
+
+/// Every Secret's metadata, across all namespaces. An Api of metadata asks for metadata only:
+/// no Secret's data crosses the wire here.
+async fn watch_secrets(fleet: Arc<Fleet>, api: kube::Api<SecretMeta>) {
+    const KIND: &str = "secret";
+    let mut stream = watcher(api, watcher::Config::default())
+        .default_backoff()
+        .boxed();
+    let mut fresh: Option<BTreeMap<String, Value>> = None;
+    loop {
+        match stream.try_next().await {
+            Ok(Some(ev)) => {
+                fleet.note(KIND, "");
+                match ev {
+                    watcher::Event::Init => fresh = Some(BTreeMap::new()),
+                    watcher::Event::InitApply(m) => {
+                        if let Some(f) = fresh.as_mut() {
+                            let (k, v) = secret_keyed(&m);
+                            f.insert(k, v);
+                        }
+                    }
+                    watcher::Event::InitDone => {
+                        if let Some(f) = fresh.take() {
+                            fleet.reset(KIND, f);
+                        }
+                    }
+                    watcher::Event::Apply(m) => {
+                        let (k, v) = secret_keyed(&m);
+                        fleet.put(KIND, k, v);
+                    }
+                    watcher::Event::Delete(m) => fleet.del(&secret_keyed(&m).0),
+                }
+            }
+            Ok(None) => {
+                fleet.note(KIND, "the watch ended");
+                return;
+            }
+            Err(e) if refused(&e) => {
+                fleet.note(KIND, "not allowed to list secrets in all namespaces");
+                return;
+            }
+            Err(e) => fleet.note(KIND, &e.to_string()),
+        }
+    }
+}
+
+/// Whether this client may read (get) Secrets in `ns`: the API server's own answer, a
+/// SelfSubjectAccessReview, so the page can show a drawer locked before anyone pulls it.
+///
+/// # Errors
+/// The review could not be made.
+pub async fn can_read_secrets(client: &kube::Client, ns: &str) -> Result<bool, kube::Error> {
+    use k8s_openapi::api::authorization::v1::{
+        ResourceAttributes, SelfSubjectAccessReview, SelfSubjectAccessReviewSpec,
+    };
+    let review = SelfSubjectAccessReview {
+        spec: SelfSubjectAccessReviewSpec {
+            resource_attributes: Some(ResourceAttributes {
+                namespace: Some(ns.to_owned()),
+                verb: Some("get".to_owned()),
+                resource: Some("secrets".to_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let api: kube::Api<SelfSubjectAccessReview> = kube::Api::all(client.clone());
+    let r = api
+        .create(&kube::api::PostParams::default(), &review)
+        .await?;
+    Ok(r.status.is_some_and(|s| s.allowed))
+}
+
+/// Why a drawer stays shut: the API server's code (403, 404) and what it said.
+pub struct Refusal {
+    pub code: u16,
+    pub message: String,
+}
+
+/// One value as the page shows it: text when it is UTF-8, else base64, and its size.
+fn shown(bytes: &[u8]) -> Value {
+    use base64::Engine as _;
+    match std::str::from_utf8(bytes) {
+        Ok(t) => json!({"bytes": bytes.len(), "text": true, "value": t}),
+        Err(_) => json!({"bytes": bytes.len(), "text": false,
+                         "value": base64::engine::general_purpose::STANDARD.encode(bytes)}),
+    }
+}
+
+/// What a drawer holds: without `key`, the Secret's type and each key with its size (no
+/// value); with `key`, that one value.
+fn drawer(sec: &Secret, key: Option<&str>) -> Result<Value, Refusal> {
+    let data = sec.data.clone().unwrap_or_default();
+    match key {
+        None => Ok(json!({
+            "type": sec.type_.clone().unwrap_or_else(|| "Opaque".to_owned()),
+            "immutable": sec.immutable.unwrap_or(false),
+            "keys": data.iter().map(|(k, v)| json!({"name": k, "bytes": v.0.len(),
+                                                     "text": std::str::from_utf8(&v.0).is_ok()}))
+                        .collect::<Vec<_>>(),
+        })),
+        Some(k) => data
+            .get(k)
+            .map(|v| {
+                let mut out = shown(&v.0);
+                out["key"] = json!(k);
+                out
+            })
+            .ok_or_else(|| Refusal {
+                code: 404,
+                message: format!("no key {k:?} in this Secret"),
+            }),
+    }
+}
+
+/// Pull a drawer open: read one Secret with this client (the person's own credentials) and
+/// return what [`drawer`] shows of it. Nothing is kept.
+///
+/// # Errors
+/// The API server refused or could not find it, or could not be reached.
+pub async fn open_secret(
+    client: &kube::Client,
+    ns: &str,
+    name: &str,
+    key: Option<&str>,
+) -> Result<Value, Refusal> {
+    let api: kube::Api<Secret> = kube::Api::namespaced(client.clone(), ns);
+    match api.get(name).await {
+        Ok(sec) => drawer(&sec, key),
+        Err(kube::Error::Api(s)) => Err(Refusal {
+            code: s.code,
+            message: s.message,
+        }),
+        Err(e) => Err(Refusal {
+            code: 502,
+            message: e.to_string(),
+        }),
+    }
+}
+
 // ------------------------------------------------------------------------------ the demo
+
+/// One of the demo's Secrets: namespace, name, type, and each key with a placeholder value.
+type DemoSecret = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+/// The demo's Secrets.
+const DEMO_SECRETS: &[DemoSecret] = &[
+    (
+        "team-a",
+        "api-db-credentials",
+        "Opaque",
+        &[
+            ("username", "demo-user"),
+            ("password", "(demo placeholder)"),
+        ],
+    ),
+    (
+        "team-a",
+        "api-tls",
+        "kubernetes.io/tls",
+        &[
+            ("tls.crt", "(demo placeholder)"),
+            ("tls.key", "(demo placeholder)"),
+        ],
+    ),
+    (
+        "team-a",
+        "worker-queue",
+        "Opaque",
+        &[("QUEUE_URL", "amqp://queue.example.invalid:5672")],
+    ),
+    (
+        "team-b",
+        "web-tls",
+        "kubernetes.io/tls",
+        &[
+            ("tls.crt", "(demo placeholder)"),
+            ("tls.key", "(demo placeholder)"),
+        ],
+    ),
+    (
+        "team-b",
+        "registry-pull",
+        "kubernetes.io/dockerconfigjson",
+        &[(
+            ".dockerconfigjson",
+            "{\"auths\":{\"ghcr.io\":{\"auth\":\"(demo placeholder)\"}}}",
+        )],
+    ),
+    (
+        "kube-system",
+        "bootstrap-token-demo",
+        "bootstrap.kubernetes.io/token",
+        &[
+            ("token-id", "(demo placeholder)"),
+            ("token-secret", "(demo placeholder)"),
+        ],
+    ),
+    (
+        "kube-system",
+        "coredns-config-backup",
+        "Opaque",
+        &[("Corefile", ".:53 { forward . /etc/resolv.conf }")],
+    ),
+    (
+        "mediatore-system",
+        "broker-oidc-client",
+        "Opaque",
+        &[("client-secret", "(demo placeholder)")],
+    ),
+    (
+        "mediatore-system",
+        "broker-tls",
+        "kubernetes.io/tls",
+        &[
+            ("tls.crt", "(demo placeholder)"),
+            ("tls.key", "(demo placeholder)"),
+            ("ca.crt", "(demo placeholder)"),
+        ],
+    ),
+    (
+        "cert-manager",
+        "cert-manager-webhook-ca",
+        "Opaque",
+        &[
+            ("ca.crt", "(demo placeholder)"),
+            ("tls.crt", "(demo placeholder)"),
+            ("tls.key", "(demo placeholder)"),
+        ],
+    ),
+    (
+        "banlieue-system",
+        "libvirt-client-tls",
+        "kubernetes.io/tls",
+        &[
+            ("tls.crt", "(demo placeholder)"),
+            ("tls.key", "(demo placeholder)"),
+        ],
+    ),
+];
+
+/// The demo's access: every namespace's Secrets are readable but kube-system's, so a locked
+/// drawer shows.
+#[must_use]
+pub fn demo_can_read(ns: &str) -> bool {
+    ns != "kube-system"
+}
+
+/// A drawer in the demo, as [`open_secret`] answers for a cluster.
+///
+/// # Errors
+/// kube-system's (refused, as RBAC would) and an unknown Secret (not found).
+pub fn demo_secret(ns: &str, name: &str, key: Option<&str>) -> Result<Value, Refusal> {
+    if !demo_can_read(ns) {
+        return Err(Refusal {
+            code: 403,
+            message: format!(
+                "secrets \"{name}\" is forbidden: the demo user cannot get resource \"secrets\" in the namespace \"{ns}\""
+            ),
+        });
+    }
+    let (_, _, ty, kv) = DEMO_SECRETS
+        .iter()
+        .find(|(n, s, _, _)| *n == ns && *s == name)
+        .ok_or_else(|| Refusal {
+            code: 404,
+            message: format!("secrets \"{name}\" not found"),
+        })?;
+    let sec = Secret {
+        type_: Some((*ty).to_owned()),
+        data: Some(
+            kv.iter()
+                .map(|(k, v)| {
+                    (
+                        (*k).to_owned(),
+                        k8s_openapi::ByteString(v.as_bytes().to_vec()),
+                    )
+                })
+                .collect(),
+        ),
+        ..Default::default()
+    };
+    drawer(&sec, key)
+}
 
 /// A container for the demo: name, image, and its state as the kubelet reports it.
 struct DemoCtr {
@@ -599,6 +922,15 @@ pub async fn demo(fleet: Arc<Fleet>) {
             cr_json(g, v, k, ns, name, ready),
         );
     }
+    for (ns, name, _, _) in DEMO_SECRETS {
+        fleet.put(
+            "secret",
+            format!("secret/{ns}/{name}"),
+            json!({"apiVersion": "v1", "kind": "Secret",
+                   "metadata": {"name": name, "namespace": ns, "uid": format!("demo-{ns}-{name}"),
+                                "creationTimestamp": "2026-11-21T10:00:00Z"}}),
+        );
+    }
     // One pod cycles: pending, running, restarting.
     let mut tick = 0u32;
     loop {
@@ -661,6 +993,58 @@ mod tests {
             v.pointer("/metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_drawer_lists_keys_without_values_until_one_is_asked_for() {
+        let sec = Secret {
+            type_: Some("kubernetes.io/tls".into()),
+            data: Some(
+                [
+                    (
+                        "tls.key".to_owned(),
+                        k8s_openapi::ByteString(b"secret".to_vec()),
+                    ),
+                    ("bin".to_owned(), k8s_openapi::ByteString(vec![0xff, 0x00])),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let keys = drawer(&sec, None).ok().unwrap();
+        assert_eq!(keys["type"], "kubernetes.io/tls");
+        assert!(
+            !keys.to_string().contains("secret\""),
+            "no value in the listing"
+        );
+        assert_eq!(keys["keys"].as_array().unwrap().len(), 2);
+        let v = drawer(&sec, Some("tls.key")).ok().unwrap();
+        assert_eq!(v["value"], "secret");
+        let b = drawer(&sec, Some("bin")).ok().unwrap();
+        assert_eq!(
+            (b["text"].as_bool(), b["value"].as_str()),
+            (Some(false), Some("/wA="))
+        );
+        assert_eq!(drawer(&sec, Some("nope")).err().unwrap().code, 404);
+        assert_eq!(
+            demo_secret("kube-system", "x", None).err().unwrap().code,
+            403
+        );
+    }
+
+    #[test]
+    fn a_secrets_last_applied_copy_never_reaches_the_page() {
+        let m: SecretMeta = serde_json::from_value(json!({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "s", "namespace": "a", "annotations": {
+                "kubectl.kubernetes.io/last-applied-configuration": "{\"data\":{\"p\":\"data-marker\"}}",
+                "keep": "1"}}
+        }))
+        .unwrap();
+        let (k, v) = secret_keyed(&m);
+        assert_eq!(k, "secret/a/s");
+        assert!(!v.to_string().contains("data-marker"));
+        assert_eq!(v.pointer("/metadata/annotations/keep"), Some(&json!("1")));
     }
 
     #[test]
