@@ -456,7 +456,7 @@ impl Provider {
 }
 
 /// One signed-in person: their token (behind a lock the kube client reads on every call),
-/// that client, their Admin view's fleet, and the tasks that serve it.
+/// that client, their Admin and Kubernetes views' pictures, and the tasks that serve them.
 pub struct User {
     pub claims: Mutex<Claims>,
     /// The name and groups the API server sees (a SelfSubjectReview), once asked.
@@ -465,6 +465,8 @@ pub struct User {
     refresh: Mutex<Option<String>>,
     pub client: kube::Client,
     pub fleet: Arc<crate::admin::Fleet>,
+    /// The Kubernetes view's picture: the whole cluster, as their RBAC shows it.
+    pub cluster: Arc<crate::admin::Fleet>,
     tasks: Mutex<Vec<tokio::task::AbortHandle>>,
     seen: Mutex<Instant>,
     ended: AtomicBool,
@@ -584,6 +586,7 @@ impl Sessions {
             token,
             refresh: Mutex::new(tokens.refresh_token),
             fleet: crate::admin::Fleet::new(),
+            cluster: crate::admin::Fleet::new(),
             tasks: Mutex::new(Vec::new()),
             seen: Mutex::new(Instant::now()),
             ended: AtomicBool::new(false),

@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Erick Bourgeois, Recess -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recess Kubernetes</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/agentsandbox.css">
+  <link rel="stylesheet" href="/admin.css">
+  <link rel="stylesheet" href="/kubernetes.css">
+  <script src="/cli.js" defer></script>
+  <script src="/theatre.js" defer></script>
+  <script src="/kubernetes.js" defer></script>
+</head>
+<body>
+  <canvas id="scene" aria-hidden="true"></canvas>
+  <div id="labels" aria-hidden="true"></div>
+
+  <header class="bar">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Recess <em>kubernetes</em></div>
+    <div id="counts" class="counts" aria-label="Pods by state"></div>
+    <div class="bar-right">
+      <label class="view-pick" title="What the page shows; switching keeps your run">
+        <span>View</span>
+        <select id="view">
+          <option value="classic">Classic</option>
+          <option value="agentsandbox">AgentSandbox</option>
+          <option value="admin">Admin</option>
+          <option value="kubernetes" selected>Kubernetes</option>
+        </select>
+      </label>
+      <input id="filter" class="filter" type="search" spellcheck="false" placeholder="filter: name, namespace, kind, image, node" aria-label="Filter pods and resources">
+      <span id="live" class="pill" title="The stream from this server">connecting</span>
+    </div>
+  </header>
+
+  <!-- The inspector: the details of what is picked: a namespace, a pod or one of its containers, a custom resource, the API. -->
+  <aside id="insp" class="insp" hidden>
+    <div class="insp-head">
+      <div class="tabs" role="tablist">
+        <button id="tab-details" class="tab on" role="tab" type="button">Details</button>
+      </div>
+      <button id="insp-close" class="ghost small" type="button" title="Hide (Esc)">Hide</button>
+    </div>
+    <div id="details" class="details" tabindex="0"></div>
+  </aside>
+
+  <footer id="caption" class="caption" aria-live="polite">
+    <div id="cap-title" class="cap-title">The cluster, as your RBAC shows it</div>
+    <div id="cap-detail" class="cap-detail"></div>
+    <div id="cap-notes" class="cap-fix" hidden></div>
+    <div class="cap-hint">click a namespace, a pod (it opens on its containers) or a resource · drag to orbit · shift-drag or ⌘-drag to pan · scroll to zoom<span class="layout-hint" hidden> · ctrl- or ⌥-drag a namespace to move it, kept · ⌘-click or shift-⌘-drag to mark several</span> · Esc to let go</div>
+  </footer>
+</body>
+</html>

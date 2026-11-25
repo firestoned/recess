@@ -1,0 +1,53 @@
+/* Copyright (c) 2026 Erick Bourgeois, Recess */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/* The Kubernetes page: agentsandbox.css's blueprint and admin.css's bar, with the pods' states. */
+:root { --dimmed: #4b5a74; }
+
+.counts button.unready { border-color: rgba(251, 191, 36, .5); color: var(--seal); }
+.counts button.failing { border-color: rgba(248, 113, 113, .6); color: var(--bad); }
+.counts button.succeeded { border-color: rgba(74, 222, 128, .4); color: var(--ok); }
+.counts button.terminating { color: var(--dimmed); }
+
+.lbl.cluster b { color: var(--wire); font-size: 13px; letter-spacing: .2em; }
+.lbl.kns b { color: var(--ink); font-size: 11.5px; letter-spacing: .16em; }
+.lbl.kns.terminating b { color: var(--muted); text-decoration: line-through; }
+.lbl.pod b { font-size: 9.5px; }
+.lbl.pod.running b { color: var(--wire); }
+.lbl.pod.unready b { color: var(--seal); }
+.lbl.pod.pending b, .lbl.pod.terminating b { color: var(--muted); }
+.lbl.pod.failing b { color: var(--bad); }
+.lbl.pod.succeeded b { color: var(--ok); }
+.lbl.cr b { font-size: 9px; color: var(--ident); }
+.lbl.cr.ok b { color: var(--ok); }
+.lbl.cr.bad b { color: var(--bad); }
+.lbl.shelf b { font-size: 8.5px; color: var(--muted); letter-spacing: .14em; }
+.lbl.ctr b { font-size: 10px; }
+.lbl.ctr.running b { color: var(--wire); }
+.lbl.ctr.unready b, .lbl.ctr.waiting b { color: var(--seal); }
+.lbl.ctr.failing b { color: var(--bad); }
+.lbl.ctr.done b { color: var(--ok); }
+.lbl.ctr.init b { color: var(--muted); }
+.lbl.ctr.sel { outline-color: var(--wire); }
+
+/* Pod and container states in the details. */
+.details .st-running { color: var(--wire); } .details .st-unready { color: var(--seal); }
+.details .st-pending, .details .st-terminating { color: var(--muted); }
+.details .st-failing { color: var(--bad); } .details .st-succeeded { color: var(--ok); }
+.details .st-ok { color: var(--ok); } .details .st-bad { color: var(--bad); } .details .st-unknown { color: var(--ident); }
+.details .layer.picked { box-shadow: 0 0 0 1px var(--wire) inset, 0 0 12px rgba(94, 231, 255, .18); }
+.details .layer-head .pick { font: 600 11px var(--mono); }
+.details .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.details .chip { font: 10px var(--mono); padding: 1px 6px; border: 1px solid var(--faint); border-radius: 2px; color: var(--muted); }
+
+/* The vaults: amber when its Secrets are readable, red when locked; a box's state likewise. */
+.lbl.vault b { color: var(--wire); font-size: 10px; letter-spacing: .16em; }
+.lbl.vault.readable b { color: var(--seal); }
+.lbl.vault.locked b { color: var(--bad); }
+.lbl.box b { font-size: 9px; color: var(--wire); }
+.lbl.box.readable b { color: var(--seal); }
+.lbl.box.locked b { color: var(--bad); }
+.lbl.box.open b { color: var(--ink); }
+.details .keys td:first-child { color: var(--ink); }
+.details .keys button { padding: 2px 8px; }
+.details pre.secret-value { color: var(--seal); max-height: 16em; overflow: auto; }

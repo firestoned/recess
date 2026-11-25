@@ -77,6 +77,16 @@ const ASSETS: &[(&str, &str, &str)] = &[
         "text/css",
         include_str!("../assets/admin.css"),
     ),
+    (
+        "/kubernetes.js",
+        "text/javascript",
+        include_str!("../assets/kubernetes.js"),
+    ),
+    (
+        "/kubernetes.css",
+        "text/css",
+        include_str!("../assets/kubernetes.css"),
+    ),
 ];
 
 /// The page for each view.
@@ -85,6 +95,7 @@ const fn page(view: View) -> &'static str {
         View::Classic => include_str!("../assets/index.html"),
         View::AgentSandbox => include_str!("../assets/agentsandbox.html"),
         View::Admin => include_str!("../assets/admin.html"),
+        View::Kubernetes => include_str!("../assets/kubernetes.html"),
     }
 }
 
@@ -105,10 +116,18 @@ pub enum View {
     /// Every live agent in the cluster, in the same 3D theatre; read-only.
     #[value(alias = "watch")]
     Admin,
+    /// The whole cluster as your RBAC shows it: every namespace a room, its pods (open one for
+    /// its containers) and its custom resources; read-only.
+    Kubernetes,
 }
 
 impl View {
-    const ALL: [Self; 3] = [Self::Classic, Self::AgentSandbox, Self::Admin];
+    const ALL: [Self; 4] = [
+        Self::Classic,
+        Self::AgentSandbox,
+        Self::Admin,
+        Self::Kubernetes,
+    ];
 
     /// The name in `--view`, `?view=` and the cookie.
     const fn slug(self) -> &'static str {
@@ -116,6 +135,7 @@ impl View {
             Self::Classic => "classic",
             Self::AgentSandbox => "agentsandbox",
             Self::Admin => "admin",
+            Self::Kubernetes => "kubernetes",
         }
     }
 
@@ -147,6 +167,8 @@ struct App {
     tls: Mutex<std::collections::HashMap<&'static str, (std::time::Instant, serde_json::Value)>>,
     /// What the admin page shows, watched once for every viewer.
     fleet: Arc<crate::admin::Fleet>,
+    /// What the Kubernetes page shows, the same way.
+    cluster: Arc<crate::admin::Fleet>,
     /// Set on Ctrl-C: every open event stream ends, so the graceful shutdown is not left
     /// waiting on a page that would otherwise stream forever.
     stopping: tokio::sync::watch::Sender<bool>,
@@ -228,6 +250,7 @@ pub async fn serve(
         issuer: Mutex::new((String::new(), String::new())),
         tls: Mutex::new(std::collections::HashMap::new()),
         fleet: crate::admin::Fleet::new(),
+        cluster: crate::admin::Fleet::new(),
         stopping: tokio::sync::watch::channel(false).0,
         shared,
     });
@@ -261,6 +284,9 @@ pub async fn serve(
         .route("/api/layout", get(layout).put(save_layout))
         .route("/api/admin", get(admin_events))
         .route("/api/admin/output", get(admin_output))
+        .route("/api/kubernetes", get(kubernetes_events))
+        .route("/api/kubernetes/access", get(kubernetes_access))
+        .route("/api/kubernetes/secret", get(kubernetes_secret))
         .route("/auth/logout", post(sign_out))
         .route_layer(middleware::from_fn_with_state(app.clone(), require_access));
     let api = ASSETS.iter().fold(api, |r, &(path, ct, body)| {
@@ -269,6 +295,7 @@ pub async fn serve(
     let router = Router::new()
         .route("/", get(index))
         .route("/admin", get(admin_page))
+        .route("/kubernetes", get(kubernetes_page))
         // Its address before the rename, for links and bookmarks.
         .route("/watch", get(|| async { Redirect::permanent("/admin") }))
         .route("/auth/login", get(sign_in_start))
@@ -537,20 +564,41 @@ async fn admin_page(
     headers: HeaderMap,
     uri: axum::http::Uri,
 ) -> Response {
+    own_page(&app, &q, &headers, &uri, View::Admin)
+}
+
+/// `/kubernetes`: the Kubernetes view at its own address, as `/admin` is the Admin view's.
+async fn kubernetes_page(
+    State(app): State<Shared>,
+    Query(q): Query<IndexQuery>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Response {
+    own_page(&app, &q, &headers, &uri, View::Kubernetes)
+}
+
+/// A view at its own address (`/<slug>`), behind the same sign-in or key as `/`.
+fn own_page(
+    app: &App,
+    q: &IndexQuery,
+    headers: &HeaderMap,
+    uri: &axum::http::Uri,
+    view: View,
+) -> Response {
     if app.shared.is_some() {
-        if user_of(&app, &headers).is_none() {
-            return to_sign_in(&uri);
+        if user_of(app, headers).is_none() {
+            return to_sign_in(uri);
         }
     } else if let Some(t) = q.t.as_deref() {
-        return trade_key(&app, t, "/admin");
-    } else if !has_cookie(&app, &headers) {
+        return trade_key(app, t, &format!("/{}", view.slug()));
+    } else if !has_cookie(app, headers) {
         return (
             StatusCode::FORBIDDEN,
             "open the link recess printed at start",
         )
             .into_response();
     }
-    asset("text/html; charset=utf-8", page(View::Admin))
+    asset("text/html; charset=utf-8", page(view))
 }
 
 /// The admin page's stream: the whole picture, then each change. The first viewer starts the
@@ -591,6 +639,156 @@ async fn admin_events(
             }
         }
     }
+    fleet_stream(&app, fleet)
+}
+
+/// The Kubernetes page's stream, as the admin page's: the whole cluster, then each change. The
+/// first viewer starts discovery and the watches, with the signed-in person's own token when
+/// shared (their RBAC decides what they see), else with the kubeconfig.
+async fn kubernetes_events(
+    State(app): State<Shared>,
+    user: Option<Extension<Arc<User>>>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let fleet = match &user {
+        Some(u) => u.cluster.clone(),
+        None => app.cluster.clone(),
+    };
+    if fleet.first() {
+        if app.demo {
+            let h = tokio::spawn(crate::cluster::demo(fleet.clone())).abort_handle();
+            if let Some(u) = &user {
+                u.hold([h]);
+            }
+        } else if let Some(u) = &user {
+            u.hold(crate::cluster::spawn(&fleet, &u.client));
+        } else {
+            match app
+                .kube_client
+                .get_or_try_init(|| crate::engine::kube_client(&app.kube))
+                .await
+            {
+                Ok(c) => {
+                    crate::cluster::spawn(&fleet, c);
+                }
+                Err(e) => fleet.note("cluster", &format!("kube: {e:#}")),
+            }
+        }
+    }
+    fleet_stream(&app, fleet)
+}
+
+/// The client a Kubernetes read is made with: the signed-in person's own when shared, else
+/// the kubeconfig's.
+async fn kube_for(app: &App, user: Option<&User>) -> Result<kube::Client, String> {
+    if let Some(u) = user {
+        return Ok(u.client.clone());
+    }
+    app.kube_client
+        .get_or_try_init(|| crate::engine::kube_client(&app.kube))
+        .await
+        .cloned()
+        .map_err(|e| format!("kube: {e:#}"))
+}
+
+/// JSON that no cache keeps: a Secret's keys or value.
+fn no_store(v: serde_json::Value) -> Response {
+    let mut r = Json(v).into_response();
+    r.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
+    );
+    r
+}
+
+/// A key in a Secret's data: what may be asked for, and nothing else.
+fn secret_key(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 253
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+}
+
+#[derive(Deserialize)]
+struct AccessQuery {
+    ns: String,
+}
+
+/// `/api/kubernetes/access?ns=`: whether the viewer may read Secrets in the namespace, as the
+/// API server answers a SelfSubjectAccessReview for them: the vault's drawers, locked or not.
+async fn kubernetes_access(
+    State(app): State<Shared>,
+    user: Option<Extension<Arc<User>>>,
+    Query(q): Query<AccessQuery>,
+) -> Response {
+    if !kube_name(&q.ns) {
+        return err(StatusCode::BAD_REQUEST, "ns is a Kubernetes name");
+    }
+    if app.demo {
+        return Json(json!({"ns": q.ns, "read": crate::cluster::demo_can_read(&q.ns)}))
+            .into_response();
+    }
+    let client = match kube_for(&app, user.as_ref().map(|u| &*u.0)).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::BAD_GATEWAY, e),
+    };
+    match crate::cluster::can_read_secrets(&client, &q.ns).await {
+        Ok(read) => Json(json!({"ns": q.ns, "read": read})).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, format!("access review: {e}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct SecretQuery {
+    ns: String,
+    name: String,
+    key: Option<String>,
+}
+
+/// `/api/kubernetes/secret?ns=&name=[&key=]`: a drawer pulled open. Without `key`, the Secret's
+/// type and its keys with their sizes; with `key`, that one value. Read with the viewer's own
+/// credentials each time, so their RBAC decides; never cached, here or in the browser.
+async fn kubernetes_secret(
+    State(app): State<Shared>,
+    user: Option<Extension<Arc<User>>>,
+    Query(q): Query<SecretQuery>,
+) -> Response {
+    if !kube_name(&q.ns) || !kube_name(&q.name) {
+        return err(StatusCode::BAD_REQUEST, "ns and name are Kubernetes names");
+    }
+    if q.key.as_deref().is_some_and(|k| !secret_key(k)) {
+        return err(StatusCode::BAD_REQUEST, "key is a Secret data key");
+    }
+    let got = if app.demo {
+        crate::cluster::demo_secret(&q.ns, &q.name, q.key.as_deref())
+    } else {
+        let client = match kube_for(&app, user.as_ref().map(|u| &*u.0)).await {
+            Ok(c) => c,
+            Err(e) => return err(StatusCode::BAD_GATEWAY, e),
+        };
+        crate::cluster::open_secret(&client, &q.ns, &q.name, q.key.as_deref()).await
+    };
+    match got {
+        Ok(v) => no_store(v),
+        Err(r) => {
+            let mut resp = err(
+                StatusCode::from_u16(r.code).unwrap_or(StatusCode::BAD_GATEWAY),
+                r.message,
+            );
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store, private"),
+            );
+            resp
+        }
+    }
+}
+
+/// A picture's stream: the whole of it, then each change; a viewer that falls behind gets the
+/// whole picture again. It ends when the server stops.
+fn fleet_stream(
+    app: &App,
+    fleet: Arc<crate::admin::Fleet>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>> + use<>> {
     let start: Option<tokio::sync::broadcast::Receiver<Arc<str>>> = None;
     let stream = futures::stream::unfold((fleet, start), |(fleet, rx)| async move {
         let Some(mut rx) = rx else {
@@ -606,7 +804,7 @@ async fn admin_events(
             Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
         }
     });
-    let stream = stream.take_until(stopped(&app));
+    let stream = stream.take_until(stopped(app));
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
@@ -990,7 +1188,7 @@ struct TlsQuery {
 /// Recess's own TLS handshake with the broker or the issuer (`target=broker|issuer`): what
 /// was negotiated and presented. Only those two hosts, the ones this server talks to anyway.
 /// The 3D views whose layout can be saved, and how many nodes each may move.
-const LAYOUT_VIEWS: [&str; 2] = ["agentsandbox", "admin"];
+const LAYOUT_VIEWS: [&str; 3] = ["agentsandbox", "admin", "kubernetes"];
 const LAYOUT_MAX: usize = 512;
 
 /// What Ctrl-drag moved, by view, then by node: an offset from where the code stands it.
@@ -1210,6 +1408,16 @@ mod tests {
     }
 
     #[test]
+    fn only_a_data_key_reaches_a_secret_read() {
+        for ok in ["tls.crt", ".dockerconfigjson", "DB_PASSWORD", "a-b_c.d"] {
+            assert!(secret_key(ok), "{ok:?}");
+        }
+        for bad in ["", "a/b", "a b", "x?y", "%2e", &"a".repeat(254)] {
+            assert!(!secret_key(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn every_file_each_page_loads_is_served() {
         for html in View::ALL.map(page) {
             let refs = local_refs(html);
@@ -1280,6 +1488,7 @@ mod tests {
     fn the_two_pages_differ_and_share_the_cli_previews() {
         assert_ne!(page(View::Classic), page(View::AgentSandbox));
         assert_ne!(page(View::AgentSandbox), page(View::Admin));
+        assert_ne!(page(View::Admin), page(View::Kubernetes));
         for view in View::ALL {
             assert!(local_refs(page(view)).contains(&"/cli.js"));
         }
@@ -1329,6 +1538,10 @@ mod tests {
         assert_eq!(
             pick(View::AgentSandbox, Some("bogus"), &none),
             View::AgentSandbox
+        );
+        assert_eq!(
+            pick(View::Classic, Some("kubernetes"), &none),
+            View::Kubernetes
         );
     }
 }

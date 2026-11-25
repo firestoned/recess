@@ -8,5 +8,5 @@
 {%
   include-markdown "../../README.md"
   start="## The Admin view"
-  end="## The TUI"
+  end="## The Kubernetes view"
 %}

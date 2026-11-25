@@ -206,7 +206,7 @@ impl Fleet {
     }
 
     /// After a (re)list: the kind's items are exactly `fresh`.
-    fn reset(&self, kind: &str, fresh: BTreeMap<String, Value>) {
+    pub fn reset(&self, kind: &str, fresh: BTreeMap<String, Value>) {
         let stale: Vec<String> = lock(&self.inner)
             .items
             .iter()
