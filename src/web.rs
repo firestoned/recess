@@ -1013,8 +1013,8 @@ fn read_layout(path: &std::path::Path) -> Layout {
         .unwrap_or_default()
 }
 
-/// The saved layout, and whether this server saves one: on your machine, not when shared
-/// (everyone sees the layout as shipped).
+/// The saved layout, and whether this server saves one: on your machine, not when shared (then
+/// each browser keeps its own, in localStorage: theatre.js `saveLayout`).
 async fn layout(State(app): State<Shared>) -> Response {
     let path = crate::config::layout_path().filter(|_| app.shared.is_none());
     let views = path.as_deref().map(read_layout).unwrap_or_default();
@@ -1060,7 +1060,7 @@ async fn save_layout(State(app): State<Shared>, Json(put): Json<LayoutPut>) -> R
     if app.shared.is_some() {
         return err(
             StatusCode::FORBIDDEN,
-            "this Recess is shared: its layout is the one shipped, and moves are not saved",
+            "this Recess is shared: moves are kept in each browser, not on the server",
         );
     }
     if let Err(e) = check_layout(&put) {

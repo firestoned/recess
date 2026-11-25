@@ -202,8 +202,11 @@ stands each thing, by node or group (`spire`, `issuer`, `gateways`, `ns/team-a`,
 load, of either view, stands everything there again. Delete the file, or a view's entry in it,
 to start over. A station the code later moves keeps your offset from its new place.
 
-A shared Recess ([In a cluster](#in-a-cluster)) shows the layout as shipped and saves nothing;
-the "ctrl- or ⌥-drag to move" hint in the caption shows only where moves are kept.
+A shared Recess ([In a cluster](#in-a-cluster)) saves nothing on the server, so one person's
+moves never become everyone's: each browser keeps its own layout instead, in `localStorage`
+for that Recess's address (`recess.layout`). It follows you in that browser only; clear the
+site's data to start over. Where neither can keep it (a private window that blocks storage),
+the layout is the one shipped and the "ctrl- or ⌥-drag to move" hint is not shown.
 
 ### Recording it
 

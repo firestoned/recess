@@ -401,20 +401,44 @@ const DESIGN = {
 // or click and click again where it goes; Esc puts it back. It moves across the floor when the
 // camera looks down on it, in the upright plane facing the camera when it looks level (Shift
 // swaps the two). Ctrl-double-click puts it back where the code stands it. Each move is kept
-// as an offset from that place, per view, and saved by the server on your machine (layout.json
-// beside config.env), so the next load stands it there again. A shared Recess shows the layout as shipped and saves nothing.
-const LAYOUT = { view: '', moved: {}, editable: false, timer: 0 };
+// as an offset from that place, per view, so the next load stands it there again: by the
+// server on your machine (layout.json beside config.env) when the Recess is yours alone; in
+// this browser (localStorage, this origin) when it is shared, so each person keeps their own
+// and nobody's moves become everyone's.
+const LAYOUT = { view: '', moved: {}, editable: false, store: '', timer: 0 };
+const LAYOUT_KEY = 'recess.layout';
+// What the browser kept, as the server would accept it: at most 512 nodes per view (LAYOUT_MAX), keys of
+// 1 to 256 characters, three finite offsets each within 1000. Anything else is dropped.
+function readLocalLayout() {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}'); } catch { return {}; }
+  const views = {};
+  for (const [view, moved] of Object.entries((all && all.views) || {})) {
+    if (!moved || typeof moved !== 'object') continue;
+    const ok = Object.entries(moved).filter(([k, v]) => k.length >= 1 && k.length <= 256 && Array.isArray(v) && v.length === 3
+      && v.every((x) => typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= 1000)).slice(0, 512);
+    if (ok.length) views[view] = Object.fromEntries(ok);
+  }
+  return views;
+}
+function localStorageWorks() {
+  try { localStorage.setItem(`${LAYOUT_KEY}.probe`, '1'); localStorage.removeItem(`${LAYOUT_KEY}.probe`); return true; } catch { return false; }
+}
 async function loadLayout(viewName) {
   LAYOUT.view = viewName;
   try {
     const r = await fetch('/api/layout');
     if (r.ok) {
       const j = await r.json();
-      LAYOUT.editable = !!j.editable;
-      LAYOUT.moved = (j.views && j.views[viewName]) || {};
+      if (j.editable) { LAYOUT.store = 'server'; LAYOUT.moved = (j.views && j.views[viewName]) || {}; }
     }
-  } catch { /* no layout: the code's own places */ }
-  for (const h of document.querySelectorAll('.layout-hint')) h.hidden = !LAYOUT.editable;
+  } catch { /* no answer: this browser's, if it keeps one */ }
+  if (!LAYOUT.store && localStorageWorks()) { LAYOUT.store = 'browser'; LAYOUT.moved = readLocalLayout()[viewName] || {}; }
+  LAYOUT.editable = !!LAYOUT.store;
+  for (const h of document.querySelectorAll('.layout-hint')) {
+    h.hidden = !LAYOUT.editable;
+    h.title = LAYOUT.store === 'browser' ? 'kept in this browser: this Recess is shared' : 'kept by Recess on this machine';
+  }
   return LAYOUT.moved;
 }
 // The offset of `id`, plus `d`; one back to nothing is dropped. Saved a moment later.
@@ -423,15 +447,23 @@ function noteMove(id, d) {
   if (o.every((v) => Math.abs(v) < 0.005)) delete LAYOUT.moved[id]; else LAYOUT.moved[id] = o;
   saveLayout();
 }
+const roundOffsets = (_, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v);
 function saveLayout() {
   if (!LAYOUT.editable) return;
   clearTimeout(LAYOUT.timer);
   LAYOUT.timer = setTimeout(() => {
-    fetch('/api/layout', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ view: LAYOUT.view, moved: LAYOUT.moved }, (_, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v)),
-    }).catch(() => {});
+    if (LAYOUT.store === 'server') {
+      fetch('/api/layout', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ view: LAYOUT.view, moved: LAYOUT.moved }, roundOffsets),
+      }).catch(() => {});
+      return;
+    }
+    // This browser's: every view's, with this one replaced (dropped when nothing is moved).
+    const views = readLocalLayout();
+    if (Object.keys(LAYOUT.moved).length) views[LAYOUT.view] = LAYOUT.moved; else delete views[LAYOUT.view];
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ views }, roundOffsets)); } catch { /* full or blocked: the move stands until the page reloads */ }
   }, 200);
 }
 // Move each point in place (a point listed twice, or shared by two lists, moves once).
