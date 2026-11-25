@@ -309,6 +309,17 @@ fn wanted(kind: &str, key: &str) -> bool {
     kind != "entry" || key.starts_with("entry//mediatore-")
 }
 
+/// A list or watch refused with 404: the API server has no such resource type.
+fn not_installed(e: &watcher::Error) -> bool {
+    matches!(
+        e,
+        watcher::Error::InitialListFailed(kube::Error::Api(s))
+            | watcher::Error::WatchStartFailed(kube::Error::Api(s))
+            | watcher::Error::WatchFailed(kube::Error::Api(s))
+            if s.code == 404
+    )
+}
+
 async fn watch_kind(fleet: Arc<Fleet>, api: kube::Api<DynamicObject>, kind: &'static str) {
     let mut stream = watcher(api, watcher::Config::default())
         .default_backoff()
@@ -344,6 +355,12 @@ async fn watch_kind(fleet: Arc<Fleet>, api: kube::Api<DynamicObject>, kind: &'st
             }
             Ok(None) => {
                 fleet.note(kind, "the watch ended");
+                return;
+            }
+            // The cluster does not serve this kind at all (its CRD is not installed): say so
+            // once and stop, instead of retrying a 404 for ever.
+            Err(e) if not_installed(&e) => {
+                fleet.note(kind, "not installed on this cluster");
                 return;
             }
             // The backoff retries; the page says why until it works.

@@ -85,7 +85,12 @@ const at = (o, path) => path.split('.').reduce((v, k) => (v == null ? v : v[k]),
 const nsOf = (o) => at(o, 'metadata.namespace') || '';
 const nameOf = (o) => at(o, 'metadata.name') || '';
 const condOf = (o, type) => (at(o, 'status.conditions') || []).find((c) => c.type === type);
-const isGateway = (vm) => at(vm, 'metadata.labels')?.['mediatore.io/role'] === 'gateway' || /^gateway-/.test(nameOf(vm));
+// The egress gateways: labelled by mediatore's role, or deployed as an `egress` app (banlieue's own
+// labels, VMs named egress01...), or named gateway-N.
+const isGateway = (vm) => {
+  const l = at(vm, 'metadata.labels') || {};
+  return l['mediatore.io/role'] === 'gateway' || l['app.kubernetes.io/name'] === 'egress' || /^(gateway-|egress\d)/.test(nameOf(vm));
+};
 
 // Lookups rebuilt once after each change: the gateway decisions read from the log, the SPIRE
 // entries, the sealed envelopes, and the pools' members, by what they belong to.
