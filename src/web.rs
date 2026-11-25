@@ -179,6 +179,8 @@ struct App {
 /// What the shared mode needs at hand.
 struct Sharing {
     sessions: Arc<Sessions>,
+    /// The public URL, without a trailing slash: where browsers are sent to sign in.
+    public: String,
     host: String,
     /// Cookies get `Secure` when the public URL is https.
     secure: bool,
@@ -231,6 +233,7 @@ pub async fn serve(
         Some(Sharing {
             sessions,
             host: signin::public_host(&public),
+            public: public.clone(),
             secure: public.starts_with("https://"),
         })
     } else {
@@ -265,8 +268,8 @@ pub async fn serve(
     let addr = listener.local_addr()?;
     if let Some(sh) = &app.shared {
         eprintln!(
-            "recess on http://{addr}, served as {}; everyone signs in with {}",
-            sh.host,
+            "recess on http://{addr}, open {}; everyone signs in with {}",
+            sh.public,
             sh.sessions.provider.issuer()
         );
     } else {
@@ -401,6 +404,16 @@ async fn guard(State(app): State<Shared>, req: Request, next: Next) -> Response 
             .is_some_and(|sh| host.eq_ignore_ascii_case(&sh.host));
     if !allowed {
         return (StatusCode::FORBIDDEN, "forbidden host").into_response();
+    }
+    // Shared, at another loopback name (127.0.0.1 for localhost): cookies belong to the name a
+    // browser used, and the issuer answers at the public URL, so a sign-in started here could
+    // never finish. Pages go to the public URL first.
+    if let Some(sh) = &app.shared
+        && !host.eq_ignore_ascii_case(&sh.host)
+        && (req.method() == axum::http::Method::GET || req.method() == axum::http::Method::HEAD)
+    {
+        let pq = req.uri().path_and_query().map_or("/", |p| p.as_str());
+        return Redirect::temporary(&format!("{}{pq}", sh.public)).into_response();
     }
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
@@ -975,12 +988,21 @@ async fn sign_in_callback(
     let (Some(code), Some(state)) = (q.code.as_deref(), q.state.as_deref()) else {
         return sign_in_failed("the issuer's answer has no code");
     };
-    let bound = cookie(&headers, signin::LOGIN_COOKIE).is_some_and(|c| {
-        aws_lc_rs::constant_time::verify_slices_are_equal(c.as_bytes(), state.as_bytes()).is_ok()
-    });
+    let Some(started) = cookie(&headers, signin::LOGIN_COOKIE) else {
+        return sign_in_failed(&format!(
+            "this browser has no sign-in in flight here. It was started at another address \
+             (open {} itself, not another name for it), the server restarted, or it took over \
+             ten minutes",
+            sh.public
+        ));
+    };
+    let bound =
+        aws_lc_rs::constant_time::verify_slices_are_equal(started.as_bytes(), state.as_bytes())
+            .is_ok();
     let Some(pending) = sh.sessions.take(state).filter(|_| bound) else {
         return sign_in_failed(
-            "this answer is not for a sign-in this browser started (or it took over ten minutes)",
+            "this answer is not for the sign-in this browser started: a newer one replaced it, \
+             the server restarted, or it took over ten minutes",
         );
     };
     let tokens = match sh.sessions.provider.finish(&pending, code).await {
