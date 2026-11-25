@@ -86,8 +86,9 @@ in the session file, newest first, with how each ended (exit code, failure, stil
 ## The 3D page
 
 The View menu at the top of every page picks what it shows: **Classic** (your run as stage
-cards), **AgentSandbox** (your run as a 3D journey; `--view agentsandbox`) or **Admin**
-(every live agent in the cluster; `--view admin`, or `/admin`). The names they had before,
+cards), **AgentSandbox** (your run as a 3D journey; `--view agentsandbox`), **Admin**
+(every live agent in the cluster; `--view admin`, or `/admin`) or **Kubernetes** (the whole
+cluster as your RBAC shows it; `--view kubernetes`, or `/kubernetes`). The names they had before,
 `wired-3d` and `watch` (and `/watch`), are still accepted.
 They share the same API and guards, and your run lives on the server, so switching in the
 middle of a run reloads the page onto it; the choice is remembered, and `--view`
@@ -252,6 +253,39 @@ Each agent, VM, gateway and provider's details end with **Cross-references**: ev
 another object, the status field it was read from, and whether that object still exists; see
 [docs/cross-references.md](docs/cross-references.md) for the links and the ones still missing.
 
+## The Kubernetes view
+
+Kubernetes (`--view kubernetes`, `/kubernetes`) makes the whole theatre the cluster. Its floor is
+a plate with the Kubernetes API at its north edge; on it each namespace is a room, a wireframe
+box sized to what it holds. At the front of each room stand its pods, as AgentSandbox's jail
+cages: cyan running, amber running but not ready, dashed grey pending, red failing (a back-off,
+an image that will not pull, a non-zero exit), green succeeded, dim and dashed terminating.
+Behind them, on shelves, one shelf per kind, stand its custom resources as sheets, green when
+their Ready (or Available) condition is True, red when it is False, violet when they report none.
+
+Click a pod and it rises out of its room and opens: its containers stand inside it, init
+containers dashed, each one clickable. The details show it from the outside in, as AgentSandbox
+shows the jail: the node, the pod (its IP, service account, QoS, volumes), then each container
+(image, state, restarts, ports, requests and limits, command, mounts, and its environment's
+names and where each comes from, never a value). A picked container gets its own details, and
+Esc steps back out to the pod, then to the cluster. A pod or a resource is drawn joined to its
+owners and to what it owns, when they are on the plate. Click a room for its pods and its
+resources by kind; click the API for every custom kind discovery found, how many of each you
+can see, and the ones you may not read. The bar counts pods by state and filters by one; the
+filter box matches names, namespaces, kinds, images and nodes.
+
+What is shown is what your own credentials may list. Namespaces and pods, then every
+namespaced custom resource the API server serves (found by API discovery, Kubernetes' own
+groups left out), are each listed and watched across all namespaces: with your kubeconfig on
+your machine, with your own ID token when Recess is shared behind Dex, so the API server applies
+your RBAC. A kind you may not list cluster-wide is named on the page and tried again at the next
+discovery, every three minutes, which is also when a newly installed CRD appears. Secrets are
+never asked for. Each kind is one watch, so a cluster with many CRDs holds as many open watches
+while the page is open.
+
+Rooms can be moved and the layout kept, as in the other 3D views (Ctrl- or Option-drag a room
+or anything in it): see [Arranging the theatre](#arranging-the-theatre).
+
 ## The TUI
 
 The same flow in a terminal: the `mediatore login` form (every option, issuer required, then
@@ -334,7 +368,7 @@ empty, `0`, `false`, `no` or `off`), so a config file or a shell can carry all o
 | `--gateway-prefix` | `RECESS_GATEWAY_PREFIX` | `gateway-` |
 | `--no-gateways` | `RECESS_NO_GATEWAYS` | false |
 | `--listen` (web) | `RECESS_LISTEN` | `127.0.0.1:7480` |
-| `--view` (web) | `RECESS_VIEW` | `classic` (or `agentsandbox`, `admin`) |
+| `--view` (web) | `RECESS_VIEW` | `classic` (or `agentsandbox`, `admin`, `kubernetes`) |
 | `--no-open` (web) | `RECESS_NO_OPEN` | false |
 | `--demo` | `RECESS_DEMO` | false |
 | (demo only) | `RECESS_DEMO_PACE` | 1 (slower above, 0.1 to 10) |

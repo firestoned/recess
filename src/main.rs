@@ -7,6 +7,7 @@
 //! API for the `AgentSandbox`.
 
 mod admin;
+mod cluster;
 mod config;
 mod demo;
 mod egress;
@@ -54,7 +55,7 @@ struct WebArgs {
     /// Print the link instead of opening the browser
     #[arg(long, env = "RECESS_NO_OPEN", value_parser = clap::builder::FalseyValueParser::new())]
     no_open: bool,
-    /// The view a browser sees first: classic, agentsandbox or admin; the page's View menu
+    /// The view a browser sees first: classic, agentsandbox, admin or kubernetes; the page's View menu
     /// changes it, and remembers (`--theme`, `RECESS_THEME`: its old names)
     #[arg(long, alias = "theme", env = "RECESS_VIEW", value_enum, default_value_t = web::View::Classic)]
     view: web::View,
@@ -108,7 +109,8 @@ impl SignIn {
 enum Cmd {
     /// Serve the pipeline as a web page on loopback and open it. The page's View menu
     /// switches between the stage cards (Classic), the wireframe 3D journey (AgentSandbox,
-    /// `agentsandbox`) and every live agent in the cluster (Admin, `admin`) without touching the run.
+    /// `agentsandbox`), every live agent in the cluster (Admin, `admin`) and the whole cluster as
+    /// your RBAC shows it (Kubernetes, `kubernetes`) without touching the run.
     Web(WebArgs),
     /// The same as `web --view agentsandbox`, kept for the name it had.
     #[command(name = "web-3d", hide = true)]

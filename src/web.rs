@@ -77,6 +77,16 @@ const ASSETS: &[(&str, &str, &str)] = &[
         "text/css",
         include_str!("../assets/admin.css"),
     ),
+    (
+        "/kubernetes.js",
+        "text/javascript",
+        include_str!("../assets/kubernetes.js"),
+    ),
+    (
+        "/kubernetes.css",
+        "text/css",
+        include_str!("../assets/kubernetes.css"),
+    ),
 ];
 
 /// The page for each view.
@@ -85,6 +95,7 @@ const fn page(view: View) -> &'static str {
         View::Classic => include_str!("../assets/index.html"),
         View::AgentSandbox => include_str!("../assets/agentsandbox.html"),
         View::Admin => include_str!("../assets/admin.html"),
+        View::Kubernetes => include_str!("../assets/kubernetes.html"),
     }
 }
 
@@ -105,10 +116,18 @@ pub enum View {
     /// Every live agent in the cluster, in the same 3D theatre; read-only.
     #[value(alias = "watch")]
     Admin,
+    /// The whole cluster as your RBAC shows it: every namespace a room, its pods (open one for
+    /// its containers) and its custom resources; read-only.
+    Kubernetes,
 }
 
 impl View {
-    const ALL: [Self; 3] = [Self::Classic, Self::AgentSandbox, Self::Admin];
+    const ALL: [Self; 4] = [
+        Self::Classic,
+        Self::AgentSandbox,
+        Self::Admin,
+        Self::Kubernetes,
+    ];
 
     /// The name in `--view`, `?view=` and the cookie.
     const fn slug(self) -> &'static str {
@@ -116,6 +135,7 @@ impl View {
             Self::Classic => "classic",
             Self::AgentSandbox => "agentsandbox",
             Self::Admin => "admin",
+            Self::Kubernetes => "kubernetes",
         }
     }
 
@@ -147,6 +167,8 @@ struct App {
     tls: Mutex<std::collections::HashMap<&'static str, (std::time::Instant, serde_json::Value)>>,
     /// What the admin page shows, watched once for every viewer.
     fleet: Arc<crate::admin::Fleet>,
+    /// What the Kubernetes page shows, the same way.
+    cluster: Arc<crate::admin::Fleet>,
     /// Set on Ctrl-C: every open event stream ends, so the graceful shutdown is not left
     /// waiting on a page that would otherwise stream forever.
     stopping: tokio::sync::watch::Sender<bool>,
@@ -228,6 +250,7 @@ pub async fn serve(
         issuer: Mutex::new((String::new(), String::new())),
         tls: Mutex::new(std::collections::HashMap::new()),
         fleet: crate::admin::Fleet::new(),
+        cluster: crate::admin::Fleet::new(),
         stopping: tokio::sync::watch::channel(false).0,
         shared,
     });
@@ -261,6 +284,7 @@ pub async fn serve(
         .route("/api/layout", get(layout).put(save_layout))
         .route("/api/admin", get(admin_events))
         .route("/api/admin/output", get(admin_output))
+        .route("/api/kubernetes", get(kubernetes_events))
         .route("/auth/logout", post(sign_out))
         .route_layer(middleware::from_fn_with_state(app.clone(), require_access));
     let api = ASSETS.iter().fold(api, |r, &(path, ct, body)| {
@@ -269,6 +293,7 @@ pub async fn serve(
     let router = Router::new()
         .route("/", get(index))
         .route("/admin", get(admin_page))
+        .route("/kubernetes", get(kubernetes_page))
         // Its address before the rename, for links and bookmarks.
         .route("/watch", get(|| async { Redirect::permanent("/admin") }))
         .route("/auth/login", get(sign_in_start))
@@ -537,20 +562,41 @@ async fn admin_page(
     headers: HeaderMap,
     uri: axum::http::Uri,
 ) -> Response {
+    own_page(&app, &q, &headers, &uri, View::Admin)
+}
+
+/// `/kubernetes`: the Kubernetes view at its own address, as `/admin` is the Admin view's.
+async fn kubernetes_page(
+    State(app): State<Shared>,
+    Query(q): Query<IndexQuery>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Response {
+    own_page(&app, &q, &headers, &uri, View::Kubernetes)
+}
+
+/// A view at its own address (`/<slug>`), behind the same sign-in or key as `/`.
+fn own_page(
+    app: &App,
+    q: &IndexQuery,
+    headers: &HeaderMap,
+    uri: &axum::http::Uri,
+    view: View,
+) -> Response {
     if app.shared.is_some() {
-        if user_of(&app, &headers).is_none() {
-            return to_sign_in(&uri);
+        if user_of(app, headers).is_none() {
+            return to_sign_in(uri);
         }
     } else if let Some(t) = q.t.as_deref() {
-        return trade_key(&app, t, "/admin");
-    } else if !has_cookie(&app, &headers) {
+        return trade_key(app, t, &format!("/{}", view.slug()));
+    } else if !has_cookie(app, headers) {
         return (
             StatusCode::FORBIDDEN,
             "open the link recess printed at start",
         )
             .into_response();
     }
-    asset("text/html; charset=utf-8", page(View::Admin))
+    asset("text/html; charset=utf-8", page(view))
 }
 
 /// The admin page's stream: the whole picture, then each change. The first viewer starts the
@@ -591,6 +637,50 @@ async fn admin_events(
             }
         }
     }
+    fleet_stream(&app, fleet)
+}
+
+/// The Kubernetes page's stream, as the admin page's: the whole cluster, then each change. The
+/// first viewer starts discovery and the watches, with the signed-in person's own token when
+/// shared (their RBAC decides what they see), else with the kubeconfig.
+async fn kubernetes_events(
+    State(app): State<Shared>,
+    user: Option<Extension<Arc<User>>>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let fleet = match &user {
+        Some(u) => u.cluster.clone(),
+        None => app.cluster.clone(),
+    };
+    if fleet.first() {
+        if app.demo {
+            let h = tokio::spawn(crate::cluster::demo(fleet.clone())).abort_handle();
+            if let Some(u) = &user {
+                u.hold([h]);
+            }
+        } else if let Some(u) = &user {
+            u.hold(crate::cluster::spawn(&fleet, &u.client));
+        } else {
+            match app
+                .kube_client
+                .get_or_try_init(|| crate::engine::kube_client(&app.kube))
+                .await
+            {
+                Ok(c) => {
+                    crate::cluster::spawn(&fleet, c);
+                }
+                Err(e) => fleet.note("cluster", &format!("kube: {e:#}")),
+            }
+        }
+    }
+    fleet_stream(&app, fleet)
+}
+
+/// A picture's stream: the whole of it, then each change; a viewer that falls behind gets the
+/// whole picture again. It ends when the server stops.
+fn fleet_stream(
+    app: &App,
+    fleet: Arc<crate::admin::Fleet>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>> + use<>> {
     let start: Option<tokio::sync::broadcast::Receiver<Arc<str>>> = None;
     let stream = futures::stream::unfold((fleet, start), |(fleet, rx)| async move {
         let Some(mut rx) = rx else {
@@ -606,7 +696,7 @@ async fn admin_events(
             Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
         }
     });
-    let stream = stream.take_until(stopped(&app));
+    let stream = stream.take_until(stopped(app));
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
@@ -990,7 +1080,7 @@ struct TlsQuery {
 /// Recess's own TLS handshake with the broker or the issuer (`target=broker|issuer`): what
 /// was negotiated and presented. Only those two hosts, the ones this server talks to anyway.
 /// The 3D views whose layout can be saved, and how many nodes each may move.
-const LAYOUT_VIEWS: [&str; 2] = ["agentsandbox", "admin"];
+const LAYOUT_VIEWS: [&str; 3] = ["agentsandbox", "admin", "kubernetes"];
 const LAYOUT_MAX: usize = 512;
 
 /// What Ctrl-drag moved, by view, then by node: an offset from where the code stands it.
@@ -1280,6 +1370,7 @@ mod tests {
     fn the_two_pages_differ_and_share_the_cli_previews() {
         assert_ne!(page(View::Classic), page(View::AgentSandbox));
         assert_ne!(page(View::AgentSandbox), page(View::Admin));
+        assert_ne!(page(View::Admin), page(View::Kubernetes));
         for view in View::ALL {
             assert!(local_refs(page(view)).contains(&"/cli.js"));
         }
@@ -1329,6 +1420,10 @@ mod tests {
         assert_eq!(
             pick(View::AgentSandbox, Some("bogus"), &none),
             View::AgentSandbox
+        );
+        assert_eq!(
+            pick(View::Classic, Some("kubernetes"), &none),
+            View::Kubernetes
         );
     }
 }

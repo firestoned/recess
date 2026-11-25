@@ -97,6 +97,7 @@ nav:
   - Views:
       - AgentSandbox: agentsandbox.md
       - Admin: admin.md
+      - Kubernetes: kubernetes.md
       - Infrastructure layout: layout.md
       - TUI: tui.md
   - Run it:
