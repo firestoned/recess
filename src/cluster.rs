@@ -440,7 +440,7 @@ const DEMO_SECRETS: &[DemoSecret] = &[
         "Opaque",
         &[
             ("username", "demo-user"),
-            ("password", "demo-password-not-real"),
+            ("password", "(demo placeholder)"),
         ],
     ),
     (
@@ -448,14 +448,8 @@ const DEMO_SECRETS: &[DemoSecret] = &[
         "api-tls",
         "kubernetes.io/tls",
         &[
-            (
-                "tls.crt",
-                "-----BEGIN CERTIFICATE-----\n(demo placeholder)\n-----END CERTIFICATE-----\n",
-            ),
-            (
-                "tls.key",
-                "-----BEGIN PRIVATE KEY-----\n(demo placeholder)\n-----END PRIVATE KEY-----\n",
-            ),
+            ("tls.crt", "(demo placeholder)"),
+            ("tls.key", "(demo placeholder)"),
         ],
     ),
     (
@@ -479,14 +473,17 @@ const DEMO_SECRETS: &[DemoSecret] = &[
         "kubernetes.io/dockerconfigjson",
         &[(
             ".dockerconfigjson",
-            "{\"auths\":{\"ghcr.io\":{\"auth\":\"ZGVtbzpkZW1v\"}}}",
+            "{\"auths\":{\"ghcr.io\":{\"auth\":\"(demo placeholder)\"}}}",
         )],
     ),
     (
         "kube-system",
-        "bootstrap-token-abcdef",
+        "bootstrap-token-demo",
         "bootstrap.kubernetes.io/token",
-        &[("token-id", "abcdef"), ("token-secret", "0123456789abcdef")],
+        &[
+            ("token-id", "(demo placeholder)"),
+            ("token-secret", "(demo placeholder)"),
+        ],
     ),
     (
         "kube-system",
@@ -498,7 +495,7 @@ const DEMO_SECRETS: &[DemoSecret] = &[
         "mediatore-system",
         "broker-oidc-client",
         "Opaque",
-        &[("client-secret", "demo-client-secret")],
+        &[("client-secret", "(demo placeholder)")],
     ),
     (
         "mediatore-system",
@@ -1040,13 +1037,13 @@ mod tests {
         let m: SecretMeta = serde_json::from_value(json!({
             "apiVersion": "v1", "kind": "Secret",
             "metadata": {"name": "s", "namespace": "a", "annotations": {
-                "kubectl.kubernetes.io/last-applied-configuration": "{\"data\":{\"p\":\"c2VjcmV0\"}}",
+                "kubectl.kubernetes.io/last-applied-configuration": "{\"data\":{\"p\":\"data-marker\"}}",
                 "keep": "1"}}
         }))
         .unwrap();
         let (k, v) = secret_keyed(&m);
         assert_eq!(k, "secret/a/s");
-        assert!(!v.to_string().contains("c2VjcmV0"));
+        assert!(!v.to_string().contains("data-marker"));
         assert_eq!(v.pointer("/metadata/annotations/keep"), Some(&json!("1")));
     }
 
