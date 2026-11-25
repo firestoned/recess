@@ -18,4 +18,4 @@ configMapGenerator:
       - config.env
 images:
   - name: ghcr.io/firestoned/recess
-    newTag: main
+    newTag: 0.1.0

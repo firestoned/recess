@@ -255,6 +255,10 @@ another object, the status field it was read from, and whether that object still
 
 ## The Kubernetes view
 
+> **⚠ This view shows the cluster as *your* RBAC allows, never more.** Recess reads with
+> your own credentials (your kubeconfig on your machine, your Dex token when shared) and must
+> never be given any access of its own: see [In a cluster](#in-a-cluster).
+
 Kubernetes (`--view kubernetes`, `/kubernetes`) makes the whole theatre the cluster. Its floor is
 a plate with the Kubernetes API at its north edge; on it each namespace is a room, a wireframe
 box sized to what it holds. At the front of each room stand its pods, as AgentSandbox's jail
@@ -445,6 +449,20 @@ recess web --view admin --listen 0.0.0.0:7480 \
 Everyone then signs in with Dex before any page loads. Every Kubernetes read is made with that
 person's own ID token, so the API server applies their RBAC; without an issuer, the server is
 yours alone (loopback, the key link, your kubeconfig). A shared Recess starts no runs.
+
+> **⚠ NEVER GIVE RECESS ANY ACCESS OF ITS OWN.**
+>
+> Recess must never hold any Kubernetes permission. Do not bind its ServiceAccount to any
+> Role or ClusterRole, do not grant it `impersonate`, do not mount its token, do not hand it
+> a kubeconfig, and do not run it under another identity that has access. Every read it
+> makes is the signed-in person's own, made with their own Dex token, so the API server
+> checks **their** RBAC and nothing else. That is the whole of its security model: a page
+> that cannot see anything on its own cannot show anyone more than they could see with
+> `kubectl`, and cannot be turned against the cluster if it is compromised. A Recess with a
+> grant of its own is a misconfiguration, whatever the grant.
+>
+> The RBAC files in [`deploy/`](deploy/) are for **people** (their users or groups). Never put the
+> `recess` ServiceAccount in their subjects.
 [`deploy/`](deploy/README.md) has the manifests, built from the distroless `Dockerfile`, and
 what Dex and the API server need.
 
