@@ -152,7 +152,7 @@ gateway is a candidate, dashed, and the details say why; the demo's scripted wor
 
 | Input | Does |
 |---|---|
-| click | pick a node or an edge |
+| click | pick a node or an edge (it glows); on the floor, unpick and unmark everything |
 | double-click | open or close the vault; elsewhere, reset the orbit |
 | drag | orbit |
 | right-drag, shift-drag, Cmd-drag, W A S D | pan |
@@ -165,7 +165,8 @@ gateway is a candidate, dashed, and the details say why; the demo's scripted wor
 The renderer is a small one on a 2D canvas, with no 3D library and nothing loaded from
 elsewhere; `prefers-reduced-motion` shortens every animation. It draws only when something
 changes (your input, data from the cluster, the run moving on), and once a second for the clock
-otherwise: an idle page costs next to nothing, and nothing spins or drifts on its own.
+otherwise: an idle page costs next to nothing, and nothing spins or drifts on its own. Only what
+is picked glows.
 
 ### Arranging the theatre
 

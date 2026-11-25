@@ -594,7 +594,7 @@ function drawPaper(p, alpha = 1) {
   const t = p.t, fade = (1 - p.morph) * alpha;
   const col = fx.failed && D.act < 3 && PAPERS[D.sheet] === p ? C.bad : C.wire;
   lines(pts, outline, col, 0.95 * fade, 1.2);
-  lines(pts, rules, C.wire, (0.14 + 0.7 * t) * fade, 1, { glow: t > 0.2 });
+  lines(pts, rules, C.wire, (0.14 + 0.7 * t) * fade, 1);
   lines(pts, verts, C.wire, 0.75 * t * fade, 1);
   // The margin rule, as on ruled paper.
   const mpts = [], mN = 14;
@@ -732,7 +732,7 @@ function drawEnvelope() {
 function drawStations() {
   const t = clock, act = D.act;
   const lit = (n) => (act >= n ? 1 : 0.32);
-  lines(SHAPES.floor.pts, SHAPES.floor.edges, C.dim, 0.55, 1, { glow: false });
+  lines(SHAPES.floor.pts, SHAPES.floor.edges, C.dim, 0.55, 1, { glow: false, focus: false });
 
   // The vault opens and closes as asked.
   vault.open = clamp(vault.open + Math.sign(vault.want - vault.open) * Math.min(Math.abs(vault.want - vault.open), REDUCED ? 1 : 0.025));
@@ -766,9 +766,8 @@ function drawStations() {
       const g = gwPos(i), on = i < gws, carried = i === carrier;
       const col = carried ? C.carrier : C.wire;
       const a = !on ? 0.2 : carrier < 0 ? 0.8 : carried ? 1 : 0.35;
-      // Once the carrier is known the others stand back: thin and unlit.
-      const unused = carrier >= 0 && !carried;
-      draw(SHAPES.gateway, g, col, a, { ry: i * 0.7, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1, glow: !unused });
+      // Once the carrier is known the others stand back: thin and dim.
+      draw(SHAPES.gateway, g, col, a, { ry: i * 0.7, scale: carried ? 1.35 : 1, width: carried ? 1.6 : 1 });
     }
     // One edge out, and only once there is traffic: to the gateway carrying the tunnels, or,
     // while which one is not reported, to the tier as a whole. No edges to mere candidates.
@@ -1184,7 +1183,7 @@ function drawSelection() {
     } else {
       const e = edgeById(sel.id);
       if (!e || !e.show()) continue;
-      polyline(e.pts(), C.ink, a, 2.6);
+      polyline(e.pts(), C.ink, a, 2.6, { glow: sel === view.sel });
     }
   }
 }
@@ -1202,6 +1201,10 @@ function frame(now) {
   moveCamera(dt);
   { const p = PAPERS[D.sheet]; if (D.act <= 3 && p.t === 0 && !$(p.formId).classList.contains('gone') && camArrived()) fitPaper(p); }
 
+  // What is picked glows (theatre.js): the lines drawn about the picked node.
+  const fn = view.sel?.kind === 'node' && nodeById(view.sel.id);
+  THEATRE.focus = fn && fn.show() ? fn.at() : null;
+  THEATRE.focusR = fn ? fn.r * 1.5 : 0;
   ctx.clearRect(0, 0, W, H);
   ctx.globalCompositeOperation = 'lighter';
   drawStations();
@@ -1417,7 +1420,7 @@ function drawCardStack(card) {
   const { c, W } = card, H = card.H;
   for (const [i, o] of [[0, 0], [1, 1], [2, 2]].entries()) {
     const d = [o[0] * 0.16, -o[1] * 0.16, -o[0] * 0.3];
-    lines([[-W / 2, -H / 2, 0], [W / 2, -H / 2, 0], [W / 2, H / 2, 0], [-W / 2, H / 2, 0]].map((q) => add(add(c, q), d)), chain(4, true), C.wire, 0.5 - i * 0.16, 1, { glow: i === 0 });
+    lines([[-W / 2, -H / 2, 0], [W / 2, -H / 2, 0], [W / 2, H / 2, 0], [-W / 2, H / 2, 0]].map((q) => add(add(c, q), d)), chain(4, true), C.wire, 0.5 - i * 0.16, 1);
   }
 }
 
@@ -1665,6 +1668,14 @@ function openInspector(tab = 'details') {
   inspDismissed = false;
   setTab(tab);
   paintNodes();
+}
+// A click on the floor, on nothing: nothing picked and nothing marked. The camera stays.
+function unselectAll() {
+  MARK.keys = new Set();
+  if (!view.sel) return;
+  view.sel = null;
+  paintNodes();
+  renderDetails();
 }
 function closeInspector() {
   $('insp').hidden = true;
@@ -2520,6 +2531,7 @@ function bindOrbit() {
     } else if (drag && !drag.moved && e.type === 'pointerup' && !drag.pan) {
       const hit = pick(e.clientX, e.clientY);
       if (hit) select(hit.kind, hit.id, { tab: hit.kind === 'node' && hit.id === 'cage' && model.lines.length ? 'output' : 'details' });
+      else unselectAll();
     }
     drag = null;
     canvas.classList.remove('dragging');

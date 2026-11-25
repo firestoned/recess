@@ -87,8 +87,10 @@ function aim(pos, target) {
 const toCam = (p) => { const d = sub(p, cam.pos); return [dot(d, cam.r), dot(d, cam.u), dot(d, cam.f)]; };
 const proj = (c) => [cam.cx + c[0] * cam.F / c[2], cam.cy - c[1] * cam.F / c[2]];
 // How far the fog reaches, and whether a line glows unless told: off, as the glow pass (a
-// second, wide stroke) is most of a frame's cost; what is lit or picked asks for it.
-const THEATRE = { fogFar: 62, glow: false };
+// second, wide stroke) is most of a frame's cost. What is picked glows: a view sets `focus` (a
+// world point) and `focusR`, and every line drawn within that of it gets the glow pass, whatever
+// shape it belongs to; a picked edge asks for it itself.
+const THEATRE = { fogFar: 62, glow: false, focus: null, focusR: 0 };
 const fog = (z) => clamp(1.25 - z / THEATRE.fogFar, 0.07, 1);
 
 // One segment in camera space, clipped at the near plane.
@@ -112,7 +114,14 @@ function lines(pts, edges, color, alpha = 1, width = 1, opts = {}) {
   for (const [i, j] of edges) seg(cs[i], cs[j]);
   if (opts.dash) ctx.setLineDash(opts.dash);
   if (opts.dashOffset) ctx.lineDashOffset = opts.dashOffset;
-  if (opts.glow ?? THEATRE.glow) {
+  let glow = opts.glow || THEATRE.glow;
+  if (!glow && THEATRE.focus && opts.focus !== false) {
+    let x = 0, y = 0, z = 0;
+    for (const p of pts) { x += p[0]; y += p[1]; z += p[2]; }
+    const f = THEATRE.focus, k = pts.length;
+    glow = (x / k - f[0]) ** 2 + (y / k - f[1]) ** 2 + (z / k - f[2]) ** 2 < THEATRE.focusR ** 2;
+  }
+  if (glow) {
     ctx.strokeStyle = rgba(color, a * 0.16); ctx.lineWidth = width * 4.5; ctx.stroke();
   }
   ctx.strokeStyle = rgba(color, a); ctx.lineWidth = width; ctx.stroke();
@@ -296,7 +305,7 @@ function drawApi(a, t) {
 // SPIRE: lit once it holds identities for what is shown.
 function drawSpire(on, t) {
   const a = on ? 0.95 : 0.35;
-  draw(SHAPES.spire, ST.spire, C.spire, a, { glow: on });
+  draw(SHAPES.spire, ST.spire, C.spire, a);
   draw(SHAPES.spireOrbit, add(ST.spire, [0, 0.4, 0]), C.spire, a * 0.5, { rx: 0.35, glow: false });
 }
 // OpenBao: the transit key over its safe, turned to face the camera; lit once it has sealed.
@@ -304,7 +313,7 @@ function drawBao(on, t) {
   const a = on ? 0.95 : 0.35;
   draw(SHAPES.baoBody, ST.bao, C.seal, a * 0.8, { glow: false });
   const kf = Math.atan2(cam.pos[0] - ST.bao[0], cam.pos[2] - ST.bao[2]);
-  draw(SHAPES.baoKey, add(ST.bao, [0, 1.55, 0]), C.seal, a, { ry: kf, glow: on, width: on ? 1.5 : 1 });
+  draw(SHAPES.baoKey, add(ST.bao, [0, 1.55, 0]), C.seal, a, { ry: kf, width: on ? 1.5 : 1 });
 }
 // A policy's ceiling at c (its policy below it): solid with its approval, dashed and red when
 // there is none, as notaio then refuses to publish the policy (Ready=False, NoApprovedCeiling).

@@ -967,8 +967,13 @@ function frame(now) {
   const look = add(view.target, mul(norm([cam.r[0], 0, cam.r[2]]), view.shift));
   aim(add(look, off), look);
 
+  // What is picked glows (theatre.js): the lines drawn about it, for the stations, checkpoints
+  // and ceilings that do not ask for it themselves.
+  const fn = view.sel && nodes.get(view.sel);
+  THEATRE.focus = fn?.pos && !fn.gone ? fn.pos : null;
+  THEATRE.focusR = 1.6;
   ctx.clearRect(0, 0, W, H);
-  lines(floor.pts, floor.edges, C.dim, 0.35, 1);
+  lines(floor.pts, floor.edges, C.dim, 0.35, 1, { focus: false });
   drawScene(dt);
   updateLabels();
   flushOutput();
@@ -1031,7 +1036,7 @@ function drawScene(dt) {
     // A small box on the slab for each VM it runs.
     for (const vk of providerVms(n)) {
       const lit = on || selVm === vk || view.hover === vk || sel?.key === vk;
-      draw(SHAPES.chip, chipAt(n, vk), C.ident, (lit ? 1 : 0.65) * n.alpha, { scale: chipSize(n), width: lit ? 1.4 : 1, glow: lit });
+      draw(SHAPES.chip, chipAt(n, vk), C.ident, (lit ? 1 : 0.65) * n.alpha, { scale: chipSize(n), width: lit ? 1.4 : 1, glow: on || sel?.key === vk });
     }
   }
   for (const n of nodes.values()) if ((n.kind === 'vm' || n.kind === 'gateway') && n.pos && n.obj) {
@@ -1085,7 +1090,7 @@ function drawScene(dt) {
     const on = sel && (sel.key === n.key || (sel.kind === 'agent' && routesOf(egressOf(sel.obj)).some((r) => r.gateway === n.name)));
     const ready = !n.obj || condOf(n.obj, 'Ready')?.status === 'True';
     draw(SHAPES.gwBig, n.pos, l ? C.carrier : C.wire, (on ? 1 : l ? 0.95 : ready ? 0.75 : 0.3) * n.alpha,
-      { ry: n.pos[1], scale: GW_SCALE * (1 + Math.min(l, 12) * 0.04), width: on ? 2 : l ? 1.6 : 1.2, glow: ready || on, dash: ready ? null : [2, 3] });
+      { ry: n.pos[1], scale: GW_SCALE * (1 + Math.min(l, 12) * 0.04), width: on ? 2 : l ? 1.6 : 1.2, glow: on, dash: ready ? null : [2, 3] });
     if (l) lines([n.pos, add(ST.broker, [0, 1.2, 0])], [[0, 1]], C.ident, 0.12 * n.alpha, 1, { dash: [3, 6] });
   }
   // The circle round the column, turned to face you; brighter while any gateway carries traffic.
@@ -1113,7 +1118,7 @@ function drawScene(dt) {
   for (const n of nodes.values()) if (n.kind === 'audience' && n.pos) {
     const on = sel?.key === n.key || view.hover === n.key || selAuds.has(n.name);
     const used = reached.get(n.name) || 0, named = namingAudience(n.name).some((a) => live(a.obj));
-    draw(SHAPES.audience, n.pos, C.ident, (on ? 1 : used || named ? 0.85 : 0.5) * n.alpha, { ry: n.pos[0], scale: 1.5, width: on ? 1.8 : 1, glow: on || used > 0 });
+    draw(SHAPES.audience, n.pos, C.ident, (on ? 1 : used || named ? 0.85 : 0.5) * n.alpha, { ry: n.pos[0], scale: 1.5, width: on ? 1.8 : 1, glow: on });
     if (tc && (used || named || on)) {
       const pts = arcPts(tc, n.pos, 1.6, 12);
       lines(pts, chain(pts.length), C.carrier, (on ? 0.8 : used ? 0.45 : 0.18) * n.alpha, on ? 1.5 : 1.1, used ? { glow: false } : { dash: [3, 5], glow: false });
@@ -1158,7 +1163,7 @@ function drawScene(dt) {
     const m = matches(n);
     let a = (st === 'exited' ? 0.45 : st === 'pending' ? 0.6 : 0.85) * n.alpha * (m ? 1 : 0.12);
     if (isSel || hov) a = Math.max(a, 0.95 * n.alpha);
-    draw(SHAPES.agentCage, n.pos, color, a, { width: isSel ? 2 : 1, glow: isSel || (m && st === 'running' && !!view.filter), dash: st === 'pending' ? [3, 4] : null });
+    draw(SHAPES.agentCage, n.pos, color, a, { width: isSel ? 2 : 1, glow: isSel, dash: st === 'pending' ? [3, 4] : null });
     if (live(n.obj)) draw(SHAPES.agentCore, n.pos, color, a, { ry: n.pos[0], rx: 0.4 });
     if (st === 'refused') draw(SHAPES.agentCross, n.pos, C.bad, a, { width: 1.6 });
     // One line, to the gateway carrying it (or the row of them, when the broker says only that
@@ -1228,7 +1233,7 @@ function drawScene(dt) {
     p.t += dt / p.d;
     if (!from?.pos || !to || p.t >= (p.bad ? 2 : 1)) { packets.splice(i, 1); continue; }
     const tt = p.bad && p.t > 1 ? 2 - p.t : p.t;
-    draw(SHAPES.pkt, arc(add(from.pos, [0, CAGE_TOP, 0]), to, 2.2, clamp(tt)), p.bad ? C.bad : C.carrier, 0.95, { ry: t * 4, glow: true });
+    draw(SHAPES.pkt, arc(add(from.pos, [0, CAGE_TOP, 0]), to, 2.2, clamp(tt)), p.bad ? C.bad : C.carrier, 0.95, { ry: t * 4 });
   }
 }
 
@@ -1812,7 +1817,11 @@ function bind() {
     // A click picks; a Cmd-click marks or unmarks what it would move.
     if (drag && !drag.moved && e.type === 'pointerup') {
       const key = pickAt(e.clientX, e.clientY);
-      if (markKey(e)) { const n = nodes.get(key); markToggle(n && groupOf(n)); } else select(key);
+      if (markKey(e)) { const n = nodes.get(key); markToggle(n && groupOf(n)); } else {
+        // On nothing (the floor): nothing picked and nothing marked.
+        if (!key) MARK.keys = new Set();
+        select(key);
+      }
     }
     drag = null;
     canvas.classList.remove('dragging');
