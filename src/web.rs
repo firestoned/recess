@@ -207,8 +207,11 @@ pub async fn serve(
     sign_in: signin::Settings,
 ) -> anyhow::Result<()> {
     let shared = if sign_in.enabled() {
+        // Never any access of its own: every read is the signed-in person's.
+        signin::holds_no_access(std::path::Path::new(signin::SERVICE_ACCOUNT_TOKEN))?;
         let public = signin::public_url(&sign_in.public_url)?;
         let provider = signin::Provider::discover(sign_in).await?;
+        // Only the cluster's address and CA are kept from this: its credentials are dropped.
         let base = if demo {
             kube::Config::new("https://kubernetes.invalid".parse()?)
         } else {
@@ -627,15 +630,11 @@ async fn admin_events(
         } else if app.demo {
             tokio::spawn(crate::admin::demo(fleet.clone()));
         } else {
-            match app
-                .kube_client
-                .get_or_try_init(|| crate::engine::kube_client(&app.kube))
-                .await
-            {
+            match own_client(&app).await {
                 Ok(c) => {
                     crate::admin::spawn(&fleet, c, app.kube.broker_namespace.clone());
                 }
-                Err(e) => fleet.note("cluster", &format!("kube: {e:#}")),
+                Err(e) => fleet.note("cluster", &e),
             }
         }
     }
@@ -662,15 +661,11 @@ async fn kubernetes_events(
         } else if let Some(u) = &user {
             u.hold(crate::cluster::spawn(&fleet, &u.client));
         } else {
-            match app
-                .kube_client
-                .get_or_try_init(|| crate::engine::kube_client(&app.kube))
-                .await
-            {
+            match own_client(&app).await {
                 Ok(c) => {
                     crate::cluster::spawn(&fleet, c);
                 }
-                Err(e) => fleet.note("cluster", &format!("kube: {e:#}")),
+                Err(e) => fleet.note("cluster", &e),
             }
         }
     }
@@ -683,10 +678,18 @@ async fn kube_for(app: &App, user: Option<&User>) -> Result<kube::Client, String
     if let Some(u) = user {
         return Ok(u.client.clone());
     }
+    own_client(app).await.cloned()
+}
+
+/// The server's own client: your kubeconfig, on your machine alone. A shared Recess has none,
+/// by design: it holds no access of its own, and reads with each signed-in person's token.
+async fn own_client(app: &App) -> Result<&kube::Client, String> {
+    if app.shared.is_some() {
+        return Err("a shared Recess holds no access of its own: sign in".to_owned());
+    }
     app.kube_client
         .get_or_try_init(|| crate::engine::kube_client(&app.kube))
         .await
-        .cloned()
         .map_err(|e| format!("kube: {e:#}"))
 }
 
@@ -1155,13 +1158,9 @@ async fn recent(State(app): State<Shared>, user: Option<Extension<Arc<User>>>) -
             (issuer, ids)
         })
         .unwrap_or_default();
-    let client = match app
-        .kube_client
-        .get_or_try_init(|| crate::engine::kube_client(&app.kube))
-        .await
-    {
+    let client = match own_client(&app).await {
         Ok(c) => c.clone(),
-        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("kube: {e:#}")),
+        Err(e) => return err(StatusCode::BAD_GATEWAY, e),
     };
     match crate::kubeinfo::recent_sandboxes(client, &ns, &issuer, &ids, 12).await {
         Ok(items) => {

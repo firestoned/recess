@@ -16,6 +16,11 @@
 >
 > The RBAC files in `deploy/` are for **people** (their users or groups). Never put the
 > `recess` ServiceAccount in their subjects.
+>
+> Recess enforces what it can: with `--oidc-issuer`, it refuses to start if a ServiceAccount
+> token is mounted, drops any credentials from its kubeconfig (it keeps only the API server's
+> address and CA), and never builds a client of its own. On your own machine, without an
+> issuer, it is not shared: it reads with your kubeconfig, as you.
 
 Run this way, Recess is a page your team opens to watch every live agent (the Admin view) and
 the cluster itself (the Kubernetes view).

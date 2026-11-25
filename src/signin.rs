@@ -505,7 +505,9 @@ pub fn user_client(
     token: Arc<RwLock<String>>,
 ) -> anyhow::Result<kube::Client> {
     let mut cfg = base.clone();
+    // Nothing of the process's own: no kubeconfig credentials, no impersonation, no headers.
     cfg.auth_info = kube::config::AuthInfo::default();
+    cfg.headers.clear();
     let layer = tower::util::MapRequestLayer::new(
         move |mut req: axum::http::Request<kube::client::Body>| {
             let t = token.read().map(|t| t.clone()).unwrap_or_default();
@@ -520,6 +522,28 @@ pub fn user_client(
     Ok(kube::client::ClientBuilder::try_from(cfg)?
         .with_layer(&layer)
         .build())
+}
+
+/// Where a pod's ServiceAccount token is mounted.
+pub const SERVICE_ACCOUNT_TOKEN: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+
+/// A shared Recess holds no Kubernetes access of its own: every read is the signed-in
+/// person's, with their token. A mounted ServiceAccount token is an identity it could fall back
+/// on, so the server refuses to start with one. Your own machine, without an issuer, is not
+/// shared and reads with your kubeconfig: this is never asked there.
+///
+/// # Errors
+/// A token is mounted at `token`.
+pub fn holds_no_access(token: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !token.exists(),
+        "{}: a ServiceAccount token is mounted. A shared Recess must hold no access of its own: \
+         every read is made with the signed-in person's token. Set \
+         automountServiceAccountToken: false (deploy/deployment.yaml) and never bind Recess's \
+         ServiceAccount to any role",
+        token.display()
+    );
+    Ok(())
 }
 
 /// The sign-ins in flight and the sessions, all in memory: a restart signs everyone out.
@@ -703,6 +727,22 @@ pub fn cookie(name: &str, value: &str, secure: bool, max_age: Option<u64>) -> St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_shared_server_refuses_a_mounted_service_account_token() {
+        let dir = std::env::temp_dir().join(format!("recess-sa-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let token = dir.join("token");
+        let _ = std::fs::remove_file(&token);
+        assert!(
+            super::holds_no_access(&token).is_ok(),
+            "no token, no access"
+        );
+        std::fs::write(&token, "x").unwrap();
+        let e = super::holds_no_access(&token).unwrap_err().to_string();
+        assert!(e.contains("automountServiceAccountToken: false"), "{e}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     use super::*;
 
     fn jwt(claims: &Value) -> String {
