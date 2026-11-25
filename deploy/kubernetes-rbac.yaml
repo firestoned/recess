@@ -15,6 +15,9 @@
 # Custom resources: list the groups you want on the shelves. `apiGroups: ["*"]` would show
 # them all, but it matches the core group too, and with it every Secret's value; the vault
 # is granted on its own (kubernetes-secrets-rbac.yaml).
+#
+# NEVER bind the `recess` ServiceAccount, or anything Recess runs as, to this or any other role.
+# Recess holds no access of its own, by design: these are for people (users or groups) only.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

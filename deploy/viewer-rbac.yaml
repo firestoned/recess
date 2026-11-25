@@ -7,6 +7,9 @@
 #
 # Bind them to your groups as the API server names them (the Dex `groups` claim with your
 # authentication config's prefix); the subjects below are placeholders.
+#
+# NEVER bind the `recess` ServiceAccount, or anything Recess runs as, to this or any other role.
+# Recess holds no access of its own, by design: these are for people (users or groups) only.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

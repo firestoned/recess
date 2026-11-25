@@ -3,6 +3,20 @@
 
 # Recess in a cluster, behind Dex
 
+> **⚠ NEVER GIVE RECESS ANY ACCESS OF ITS OWN.**
+>
+> Recess must never hold any Kubernetes permission. Do not bind its ServiceAccount to any
+> Role or ClusterRole, do not grant it `impersonate`, do not mount its token, do not hand it
+> a kubeconfig, and do not run it under another identity that has access. Every read it
+> makes is the signed-in person's own, made with their own Dex token, so the API server
+> checks **their** RBAC and nothing else. That is the whole of its security model: a page
+> that cannot see anything on its own cannot show anyone more than they could see with
+> `kubectl`, and cannot be turned against the cluster if it is compromised. A Recess with a
+> grant of its own is a misconfiguration, whatever the grant.
+>
+> The RBAC files in `deploy/` are for **people** (their users or groups). Never put the
+> `recess` ServiceAccount in their subjects.
+
 Run this way, Recess is a page your team opens to watch every live agent (the Admin view) and
 the cluster itself (the Kubernetes view).
 Everyone signs in with Dex first: `/` and every other page send a visitor who is not signed in
