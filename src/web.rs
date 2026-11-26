@@ -48,6 +48,11 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ),
     ("/app.css", "text/css", include_str!("../assets/app.css")),
     (
+        "/signin.css",
+        "text/css",
+        include_str!("../assets/signin.css"),
+    ),
+    (
         "/cli.js",
         "text/javascript",
         include_str!("../assets/cli.js"),
@@ -308,6 +313,8 @@ pub async fn serve(
         // Its address before the rename, for links and bookmarks.
         .route("/watch", get(|| async { Redirect::permanent("/admin") }))
         .route("/auth/login", get(sign_in_start))
+        .route("/auth/ended", get(session_ended))
+        .route("/auth/session", get(session_check))
         .route(signin::CALLBACK, get(sign_in_callback))
         .merge(api)
         .layer(middleware::from_fn_with_state(app.clone(), guard))
@@ -462,11 +469,7 @@ fn user_of(app: &App, headers: &HeaderMap) -> Option<Arc<User>> {
 async fn require_access(State(app): State<Shared>, mut req: Request, next: Next) -> Response {
     if app.shared.is_some() {
         let Some(user) = user_of(&app, req.headers()) else {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "sign in first", "signIn": "/auth/login"})),
-            )
-                .into_response();
+            return signed_out(&app, req.headers());
         };
         req.extensions_mut().insert(user);
     } else if !has_cookie(&app, req.headers()) {
@@ -530,7 +533,7 @@ async fn index(
 ) -> Response {
     if app.shared.is_some() {
         if user_of(&app, &headers).is_none() {
-            return to_sign_in(&uri);
+            return to_sign_in(&app, &headers, &uri);
         }
     } else if let Some(t) = q.t.as_deref() {
         // The key leaves the address bar; a view asked for with it stays.
@@ -606,7 +609,7 @@ fn own_page(
 ) -> Response {
     if app.shared.is_some() {
         if user_of(app, headers).is_none() {
-            return to_sign_in(uri);
+            return to_sign_in(app, headers, uri);
         }
     } else if let Some(t) = q.t.as_deref() {
         return trade_key(app, t, &format!("/{}", view.slug()));
@@ -914,12 +917,117 @@ fn no_runs(app: &App) -> Option<Response> {
     })
 }
 
-/// Off to the issuer, and back to `uri` after.
-fn to_sign_in(uri: &axum::http::Uri) -> Response {
+/// `path?query`, with each value form-encoded.
+fn with_query(path: &str, pairs: &[(&str, &str)]) -> String {
+    let mut u = reqwest::Url::parse("http://x/").expect("a constant URL");
+    u.query_pairs_mut().extend_pairs(pairs);
+    format!("{path}?{}", u.query().unwrap_or_default())
+}
+
+/// Whether this browser holds a session cookie the server no longer has a session for: it
+/// expired (its token, unrefreshed), went idle, was signed out elsewhere, or the server
+/// restarted.
+fn session_gone(app: &App, headers: &HeaderMap) -> bool {
+    app.shared.is_some()
+        && cookie(headers, signin::SESSION_COOKIE).is_some_and(|c| !c.is_empty())
+        && user_of(app, headers).is_none()
+}
+
+/// The session cookie, cleared.
+fn clear_session(app: &App, r: &mut Response) {
+    if let Some(sh) = &app.shared {
+        set_cookie(
+            r,
+            &signin::cookie(signin::SESSION_COOKIE, "", sh.secure, Some(0)),
+        );
+    }
+}
+
+/// Off to sign in, and back to `uri` after. A session that has ended is logged out and shown
+/// the "Login to Recess" page; a first visit goes straight to the issuer.
+fn to_sign_in(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> Response {
     let next = uri.path_and_query().map_or("/", |p| p.as_str());
-    let mut u = reqwest::Url::parse("http://x/auth/login").expect("a constant URL");
-    u.query_pairs_mut().append_pair("next", next);
-    Redirect::to(&format!("/auth/login?{}", u.query().unwrap_or_default())).into_response()
+    if session_gone(app, headers) {
+        let mut r = Redirect::to(&with_query(
+            "/auth/ended",
+            &[("why", "expired"), ("next", next)],
+        ))
+        .into_response();
+        clear_session(app, &mut r);
+        return r;
+    }
+    Redirect::to(&with_query("/auth/login", &[("next", next)])).into_response()
+}
+
+/// The API's answer without a live session: 401, with where the page should go. A session
+/// that has ended is logged out, and the page shows "Login to Recess".
+fn signed_out(app: &App, headers: &HeaderMap) -> Response {
+    let gone = session_gone(app, headers);
+    let mut r = (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({
+            "error": if gone { "your session has ended" } else { "sign in first" },
+            "signIn": if gone { "/auth/ended?why=expired" } else { "/auth/login" },
+        })),
+    )
+        .into_response();
+    if gone {
+        clear_session(app, &mut r);
+    }
+    r
+}
+
+#[derive(Deserialize)]
+struct EndedQuery {
+    why: Option<String>,
+    next: Option<String>,
+}
+
+/// `/auth/ended`: the "Login to Recess" page, after a session ends or a sign-out. Nothing on
+/// it comes from the request but `next`, which is made a path on this server and encoded.
+async fn session_ended(State(app): State<Shared>, Query(q): Query<EndedQuery>) -> Response {
+    if app.shared.is_none() {
+        return (StatusCode::NOT_FOUND, "no sign-in on this server").into_response();
+    }
+    let why = match q.why.as_deref() {
+        Some("out") => "You signed out.",
+        _ => {
+            "Your session has ended: its sign-in expired and could not be renewed, it sat idle, \
+             or the server restarted."
+        }
+    };
+    let next = signin::safe_next(q.next.as_deref().unwrap_or("/"));
+    let login = with_query("/auth/login", &[("next", &next)]);
+    let body = include_str!("../assets/signin.html")
+        .replace("{{WHY}}", why)
+        .replace("{{LOGIN}}", &login);
+    let mut r = (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response();
+    clear_session(&app, &mut r);
+    r
+}
+
+/// `/auth/session`: whether this browser is still signed in, for an open page to ask now and
+/// then. Asking does not count as use, so an open tab does not keep an idle session alive.
+async fn session_check(State(app): State<Shared>, headers: HeaderMap) -> Response {
+    let Some(sh) = &app.shared else {
+        return Json(json!({"shared": false})).into_response();
+    };
+    let live = cookie(&headers, signin::SESSION_COOKIE)
+        .and_then(|sid| sh.sessions.live(sid))
+        .is_some();
+    if live {
+        Json(json!({"shared": true, "live": true})).into_response()
+    } else {
+        signed_out(&app, &headers)
+    }
 }
 
 #[derive(Deserialize)]

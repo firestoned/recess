@@ -7,11 +7,11 @@
 //! server, keyed by a random session cookie; the browser never holds one. The ID token is
 //! issued for the Kubernetes API server's audience (`kubernetes` by default), and every
 //! Kubernetes call made for that person carries it as the bearer: the API server verifies it
-//! and applies that person's RBAC. Recess grants nothing itself, which is why the token's
-//! signature is not checked here: it comes straight from the issuer's token endpoint over
-//! TLS (OpenID Connect Core 3.1.3.7), and the API server checks it on every call. What is
-//! checked here (issuer, audience, authorized party, expiry, nonce) is what keeps a token
-//! meant for someone or something else from being taken as a sign-in.
+//! and applies that person's RBAC. Each ID token, at sign-in and at every refresh, is checked
+//! here before it is used: its signature against the issuer's published keys (its JWKS,
+//! fetched again when it names a key not yet seen, as after a rotation), then the issuer,
+//! audience, authorized party, expiry, not-before and nonce. A session ends when its token
+//! expires without a refresh the issuer accepts.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +37,10 @@ const PENDING_TTL: Duration = Duration::from_secs(600);
 const PENDING_MAX: usize = 1024;
 /// A session not used for this long ends.
 const IDLE: Duration = Duration::from_hours(12);
+/// Clock skew allowed between the issuer and this server, in seconds, for `nbf`.
+const SKEW: i64 = 60;
+/// The issuer's keys are fetched again for a key not yet seen, at most this often.
+const JWKS_REFETCH: Duration = Duration::from_secs(60);
 /// The token is refreshed this long before it expires.
 const REFRESH_AHEAD: i64 = 120;
 
@@ -195,11 +199,12 @@ pub struct Claims {
     pub exp: i64,
 }
 
-/// The ID token's claims, checked against what this sign-in expects. The signature is not
-/// verified (see the module's documentation).
+/// The ID token's claims, checked against what this sign-in expects. Its signature is checked
+/// first, by [`verify_signature`].
 ///
 /// # Errors
-/// Not a JWT, or the issuer, audience, authorized party, expiry or nonce is not the expected one.
+/// Not a JWT, or the issuer, audience, authorized party, expiry, not-before or nonce is not
+/// the expected one.
 pub fn check(
     token: &str,
     issuer: &str,
@@ -250,6 +255,9 @@ pub fn check(
     );
     let exp = c.get("exp").and_then(Value::as_i64).unwrap_or(0);
     anyhow::ensure!(exp > at, "the ID token has expired");
+    if let Some(nbf) = c.get("nbf").and_then(Value::as_i64) {
+        anyhow::ensure!(nbf <= at + SKEW, "the ID token is not valid yet");
+    }
     if let Some(n) = nonce {
         anyhow::ensure!(
             aws_lc_rs::constant_time::verify_slices_are_equal(s("nonce").as_bytes(), n.as_bytes())
@@ -271,6 +279,161 @@ pub fn check(
     })
 }
 
+/// One of the issuer's public keys, as its JWKS publishes it (RFC 7517).
+#[derive(Clone, Deserialize)]
+pub struct Jwk {
+    kty: String,
+    #[serde(default)]
+    kid: Option<String>,
+    #[serde(default)]
+    alg: Option<String>,
+    #[serde(rename = "use", default)]
+    usage: Option<String>,
+    #[serde(default)]
+    n: Option<String>,
+    #[serde(default)]
+    e: Option<String>,
+    #[serde(default)]
+    crv: Option<String>,
+    #[serde(default)]
+    x: Option<String>,
+    #[serde(default)]
+    y: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Jwks {
+    keys: Vec<Jwk>,
+}
+
+#[derive(Deserialize)]
+struct JwtHeader {
+    alg: String,
+    #[serde(default)]
+    kid: Option<String>,
+}
+
+/// Why a signature was not taken.
+#[derive(Debug)]
+pub enum Unverified {
+    /// No published key fits the token: the issuer may have rotated, so fetch the keys again.
+    NoKey,
+    /// Refused outright: not a signed JWT, an algorithm Recess does not take, or a signature
+    /// that does not verify.
+    Bad(anyhow::Error),
+}
+
+fn b64(part: &str) -> Option<Vec<u8>> {
+    URL_SAFE_NO_PAD.decode(part.trim_end_matches('=')).ok()
+}
+
+/// Whether `sig` over `msg` verifies with `k` under `alg`.
+fn verify_with_key(alg: &str, k: &Jwk, msg: &[u8], sig: &[u8]) -> bool {
+    use aws_lc_rs::signature as sg;
+    let field = |f: &Option<String>| f.as_deref().and_then(b64);
+    match alg {
+        "RS256" | "RS384" | "RS512" => {
+            let (Some(n), Some(e)) = (field(&k.n), field(&k.e)) else {
+                return false;
+            };
+            let params = match alg {
+                "RS256" => &sg::RSA_PKCS1_2048_8192_SHA256,
+                "RS384" => &sg::RSA_PKCS1_2048_8192_SHA384,
+                _ => &sg::RSA_PKCS1_2048_8192_SHA512,
+            };
+            sg::RsaPublicKeyComponents { n, e }
+                .verify(params, msg, sig)
+                .is_ok()
+        }
+        "ES256" | "ES384" => {
+            let (params, crv): (&'static sg::EcdsaVerificationAlgorithm, _) = if alg == "ES256" {
+                (&sg::ECDSA_P256_SHA256_FIXED, "P-256")
+            } else {
+                (&sg::ECDSA_P384_SHA384_FIXED, "P-384")
+            };
+            let (Some(x), Some(y)) = (field(&k.x), field(&k.y)) else {
+                return false;
+            };
+            if k.crv.as_deref() != Some(crv) {
+                return false;
+            }
+            let point = [&[4u8][..], &x, &y].concat();
+            sg::UnparsedPublicKey::new(params, point)
+                .verify(msg, sig)
+                .is_ok()
+        }
+        "EdDSA" => {
+            let Some(x) = field(&k.x) else { return false };
+            k.crv.as_deref() == Some("Ed25519")
+                && sg::UnparsedPublicKey::new(&sg::ED25519, x)
+                    .verify(msg, sig)
+                    .is_ok()
+        }
+        _ => false,
+    }
+}
+
+/// Check a JWT's signature against the issuer's keys. Only asymmetric algorithms are taken:
+/// never `none`, never a shared secret.
+///
+/// # Errors
+/// [`Unverified::NoKey`] when no key fits (fetch the keys again), else [`Unverified::Bad`].
+pub fn verify_signature(token: &str, keys: &[Jwk]) -> Result<(), Unverified> {
+    let bad = |m: &str| Unverified::Bad(anyhow::anyhow!("the ID token {m}"));
+    let mut parts = token.split('.');
+    let (Some(h), Some(p), Some(sg), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(bad("is not a signed JWT"));
+    };
+    let header: JwtHeader = b64(h)
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or_else(|| bad("has no readable header"))?;
+    let sig = b64(sg).ok_or_else(|| bad("has no readable signature"))?;
+    let kty = match header.alg.as_str() {
+        "RS256" | "RS384" | "RS512" => "RSA",
+        "ES256" | "ES384" => "EC",
+        "EdDSA" => "OKP",
+        other => {
+            return Err(Unverified::Bad(anyhow::anyhow!(
+                "the ID token is signed with {other:?}, which Recess does not take"
+            )));
+        }
+    };
+    let msg = &token.as_bytes()[..h.len() + 1 + p.len()];
+    let fits: Vec<&Jwk> = keys
+        .iter()
+        .filter(|k| {
+            k.kty == kty
+                && k.usage.as_deref().is_none_or(|u| u == "sig")
+                && k.alg.as_deref().is_none_or(|a| a == header.alg)
+                && header
+                    .kid
+                    .as_deref()
+                    .is_none_or(|want| k.kid.as_deref() == Some(want))
+        })
+        .collect();
+    if fits.is_empty() {
+        return Err(Unverified::NoKey);
+    }
+    if fits
+        .iter()
+        .any(|k| verify_with_key(&header.alg, k, msg, &sig))
+    {
+        Ok(())
+    } else {
+        Err(bad(
+            "has a signature that does not verify with the issuer's keys",
+        ))
+    }
+}
+
+/// The issuer's keys, and when they were last fetched.
+struct KeySet {
+    keys: Vec<Jwk>,
+    fetched: Instant,
+}
+
 /// The issuer's endpoints and Recess's client there.
 pub struct Provider {
     settings: Settings,
@@ -279,6 +442,8 @@ pub struct Provider {
     authorize: String,
     token: String,
     redirect: String,
+    jwks_uri: String,
+    keys: tokio::sync::Mutex<KeySet>,
 }
 
 #[derive(Deserialize)]
@@ -286,6 +451,7 @@ struct Discovery {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
+    jwks_uri: String,
 }
 
 #[derive(Deserialize)]
@@ -362,6 +528,7 @@ impl Provider {
             })?;
             Some(s.trim().to_owned())
         };
+        let keys = fetch_keys(&http, &d.jwks_uri).await?;
         Ok(Self {
             redirect: format!("{public}{CALLBACK}"),
             settings,
@@ -369,7 +536,36 @@ impl Provider {
             http,
             authorize: d.authorization_endpoint,
             token: d.token_endpoint,
+            jwks_uri: d.jwks_uri,
+            keys: tokio::sync::Mutex::new(KeySet {
+                keys,
+                fetched: Instant::now(),
+            }),
         })
+    }
+
+    /// Check an ID token's signature, fetching the issuer's keys again (at most once a
+    /// minute) when none fits: a rotation publishes the new key before signing with it.
+    async fn verify(&self, token: &str) -> anyhow::Result<()> {
+        let mut g = self.keys.lock().await;
+        match verify_signature(token, &g.keys) {
+            Ok(()) => return Ok(()),
+            Err(Unverified::Bad(e)) => return Err(e),
+            Err(Unverified::NoKey) => {}
+        }
+        anyhow::ensure!(
+            g.fetched.elapsed() >= JWKS_REFETCH,
+            "the ID token is signed with a key the issuer does not publish"
+        );
+        g.keys = fetch_keys(&self.http, &self.jwks_uri).await?;
+        g.fetched = Instant::now();
+        match verify_signature(token, &g.keys) {
+            Ok(()) => Ok(()),
+            Err(Unverified::Bad(e)) => Err(e),
+            Err(Unverified::NoKey) => {
+                anyhow::bail!("the ID token is signed with a key the issuer does not publish")
+            }
+        }
     }
 
     #[must_use]
@@ -441,7 +637,7 @@ impl Provider {
                 ("code_verifier", &pending.verifier),
             ])
             .await?;
-        self.tokens(r, Some(&pending.nonce))
+        self.tokens(r, Some(&pending.nonce)).await
     }
 
     /// A new ID token from the refresh token.
@@ -455,13 +651,14 @@ impl Provider {
                 ("refresh_token", refresh_token),
             ])
             .await?;
-        self.tokens(r, None)
+        self.tokens(r, None).await
     }
 
-    fn tokens(&self, r: TokenResponse, nonce: Option<&str>) -> anyhow::Result<Tokens> {
+    async fn tokens(&self, r: TokenResponse, nonce: Option<&str>) -> anyhow::Result<Tokens> {
         let id_token = r.id_token.ok_or_else(|| {
             anyhow::anyhow!("the issuer returned no ID token (is `openid` among the scopes?)")
         })?;
+        self.verify(&id_token).await?;
         let claims = check(
             &id_token,
             &self.settings.issuer,
@@ -476,6 +673,21 @@ impl Provider {
             claims,
         })
     }
+}
+
+/// The issuer's published keys.
+async fn fetch_keys(http: &reqwest::Client, url: &str) -> anyhow::Result<Vec<Jwk>> {
+    let k: Jwks = http
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("{url}: {e}"))?
+        .error_for_status()?
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("{url}: {e}"))?;
+    anyhow::ensure!(!k.keys.is_empty(), "{url} publishes no keys");
+    Ok(k.keys)
 }
 
 /// One signed-in person: their token (behind a lock the kube client reads on every call),
@@ -647,12 +859,21 @@ impl Sessions {
     /// The live session for a cookie's id, marked as used.
     #[must_use]
     pub fn get(&self, sid: &str) -> Option<Arc<User>> {
+        let u = self.live(sid)?;
+        *lock(&u.seen) = Instant::now();
+        Some(u)
+    }
+
+    /// The live session for a cookie's id, not marked as used: a page asking whether it is
+    /// still signed in does not keep an idle session alive. One that has ended (signed out,
+    /// idle, its token expired without a refresh) is closed.
+    #[must_use]
+    pub fn live(&self, sid: &str) -> Option<Arc<User>> {
         let u = lock(&self.users).get(&key(sid)).cloned()?;
         if u.ended() || lock(&u.seen).elapsed() > IDLE || lock(&u.claims).exp <= now() {
             self.close(sid);
             return None;
         }
-        *lock(&u.seen) = Instant::now();
         Some(u)
     }
 
@@ -780,6 +1001,121 @@ mod tests {
     fn base() -> Value {
         serde_json::json!({"iss": ISS, "aud": "kubernetes", "sub": "Cg1", "exp": 2000,
             "nonce": "n1", "preferred_username": "octocat", "groups": ["team-a"]})
+    }
+
+    fn signed(alg: &str, kid: &str, claims: &Value, sign: impl Fn(&[u8]) -> Vec<u8>) -> String {
+        let h = URL_SAFE_NO_PAD
+            .encode(serde_json::json!({"alg": alg, "kid": kid, "typ": "JWT"}).to_string());
+        let p = URL_SAFE_NO_PAD.encode(claims.to_string());
+        let msg = format!("{h}.{p}");
+        let sig = URL_SAFE_NO_PAD.encode(sign(msg.as_bytes()));
+        format!("{msg}.{sig}")
+    }
+
+    fn jwk(v: Value) -> Jwk {
+        serde_json::from_value(v).unwrap()
+    }
+
+    fn es256() -> (aws_lc_rs::signature::EcdsaKeyPair, Jwk) {
+        use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair as _};
+        let kp = EcdsaKeyPair::generate(&ECDSA_P256_SHA256_FIXED_SIGNING).unwrap();
+        let pt = kp.public_key().as_ref().to_vec();
+        let k = jwk(serde_json::json!({
+            "kty": "EC", "kid": "ec-1", "use": "sig", "alg": "ES256", "crv": "P-256",
+            "x": URL_SAFE_NO_PAD.encode(&pt[1..33]), "y": URL_SAFE_NO_PAD.encode(&pt[33..65]),
+        }));
+        (kp, k)
+    }
+
+    #[test]
+    fn a_token_signed_by_the_issuer_verifies() {
+        use aws_lc_rs::rsa::KeySize;
+        use aws_lc_rs::signature::{KeyPair as _, RSA_PKCS1_SHA256, RsaKeyPair};
+        let rng = aws_lc_rs::rand::SystemRandom::new();
+        let (kp, k) = es256();
+        let t = signed("ES256", "ec-1", &base(), |m| {
+            kp.sign(&rng, m).unwrap().as_ref().to_vec()
+        });
+        assert!(verify_signature(&t, &[k]).is_ok());
+
+        // RS256, Dex's default.
+        let rsa = RsaKeyPair::generate(KeySize::Rsa2048).unwrap();
+        let pk = rsa.public_key();
+        let k = jwk(serde_json::json!({
+            "kty": "RSA", "kid": "rsa-1",
+            "n": URL_SAFE_NO_PAD.encode(pk.modulus().big_endian_without_leading_zero()),
+            "e": URL_SAFE_NO_PAD.encode(pk.exponent().big_endian_without_leading_zero()),
+        }));
+        let t = signed("RS256", "rsa-1", &base(), |m| {
+            let mut sig = vec![0; rsa.public_modulus_len()];
+            rsa.sign(&RSA_PKCS1_SHA256, &rng, m, &mut sig).unwrap();
+            sig
+        });
+        assert!(verify_signature(&t, &[k]).is_ok());
+    }
+
+    #[test]
+    fn a_forged_or_unsigned_token_is_refused() {
+        let rng = aws_lc_rs::rand::SystemRandom::new();
+        let (kp, k) = es256();
+        let t = signed("ES256", "ec-1", &base(), |m| {
+            kp.sign(&rng, m).unwrap().as_ref().to_vec()
+        });
+        let bad = |r: Result<(), Unverified>| matches!(r, Err(Unverified::Bad(_)));
+
+        // The claims changed after signing.
+        let mut v = base();
+        v["sub"] = serde_json::json!("someone-else");
+        let parts: Vec<&str> = t.split('.').collect();
+        let forged = format!(
+            "{}.{}.{}",
+            parts[0],
+            URL_SAFE_NO_PAD.encode(v.to_string()),
+            parts[2]
+        );
+        assert!(
+            bad(verify_signature(&forged, std::slice::from_ref(&k))),
+            "tampered claims"
+        );
+
+        // Signed by another key under the issuer's key id.
+        let (other, _) = es256();
+        let t2 = signed("ES256", "ec-1", &base(), |m| {
+            other.sign(&rng, m).unwrap().as_ref().to_vec()
+        });
+        assert!(
+            bad(verify_signature(&t2, std::slice::from_ref(&k))),
+            "another key"
+        );
+
+        // No signature at all, or a shared secret.
+        assert!(
+            bad(verify_signature(&jwt(&base()), std::slice::from_ref(&k))),
+            "alg none"
+        );
+        let hs = signed("HS256", "ec-1", &base(), |_| vec![1; 32]);
+        assert!(
+            bad(verify_signature(&hs, std::slice::from_ref(&k))),
+            "HS256"
+        );
+
+        // A key the issuer has not published (yet): fetch the keys again.
+        let t3 = signed("ES256", "ec-2", &base(), |m| {
+            kp.sign(&rng, m).unwrap().as_ref().to_vec()
+        });
+        assert!(matches!(
+            verify_signature(&t3, &[k]),
+            Err(Unverified::NoKey)
+        ));
+    }
+
+    #[test]
+    fn a_token_not_valid_yet_is_refused() {
+        let mut v = base();
+        v["nbf"] = serde_json::json!(5000);
+        assert!(check(&jwt(&v), ISS, "kubernetes", "kubernetes", Some("n1"), 1000).is_err());
+        v["nbf"] = serde_json::json!(1000 + SKEW);
+        assert!(check(&jwt(&v), ISS, "kubernetes", "kubernetes", Some("n1"), 1000).is_ok());
     }
 
     #[test]

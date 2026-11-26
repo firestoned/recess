@@ -1,0 +1,37 @@
+/* Copyright (c) 2026 Erick Bourgeois, Recess */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/* The "Login to Recess" page: the 3D views' blueprint, one card in the middle. */
+:root {
+  --bg: #05070c; --ink: #e6edf7; --muted: #8b98ad; --faint: #26324a; --wire: #5ee7ff;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: grid; place-items: center; padding: 24px;
+  background:
+    linear-gradient(rgba(94, 231, 255, .05) 1px, transparent 1px) 0 0 / 40px 40px,
+    linear-gradient(90deg, rgba(94, 231, 255, .05) 1px, transparent 1px) 0 0 / 40px 40px,
+    var(--bg);
+  color: var(--ink); font: 14px/1.5 var(--sans);
+}
+.card {
+  width: min(440px, 100%); padding: 32px 32px 28px;
+  border: 1px solid var(--faint); border-radius: 4px;
+  background: rgba(10, 14, 22, .92); box-shadow: 0 0 40px rgba(94, 231, 255, .06);
+}
+.brand { font: 600 13px var(--mono); letter-spacing: .14em; text-transform: uppercase; display: flex; align-items: center; gap: 10px; }
+.mark { width: 14px; height: 14px; border: 1.5px solid var(--wire); transform: rotate(45deg); box-shadow: 0 0 8px var(--wire); }
+h1 { margin: 22px 0 8px; font: 600 22px var(--sans); }
+.why { margin: 0 0 22px; color: var(--muted); }
+.go {
+  display: block; text-align: center; padding: 11px 16px;
+  font: 600 12px var(--mono); letter-spacing: .12em; text-transform: uppercase; text-decoration: none;
+  color: var(--wire); border: 1px solid var(--wire); border-radius: 2px;
+  box-shadow: 0 0 12px rgba(94, 231, 255, .2) inset;
+}
+.go:hover, .go:focus-visible { background: rgba(94, 231, 255, .1); outline: none; }
+.note { margin: 18px 0 0; color: var(--muted); font-size: 12px; }

@@ -114,14 +114,36 @@ document.addEventListener('DOMContentLoaded', () => {
   showSignedInUser();
 });
 
+// Where a page without a live session goes: the server says (the "Login to Recess" page when
+// a session has ended, else the issuer), and the page comes back here after.
+async function goSignIn(r) {
+  let to = '/auth/login';
+  try { to = (await r.json()).signIn || to; } catch { /* the default */ }
+  const sep = to.includes('?') ? '&' : '?';
+  location.assign(to + sep + 'next=' + encodeURIComponent(location.pathname + location.search));
+}
+
+// A shared Recess: ask now and then whether this browser is still signed in, and when the
+// tab comes back into view. Asking does not count as use, so an idle session still ends; when
+// it has, the page shows "Login to Recess" rather than a picture that has stopped.
+function watchSession() {
+  const check = async () => {
+    let r;
+    try { r = await fetch('/auth/session', { cache: 'no-store' }); } catch { return; }
+    if (r.status === 401) goSignIn(r);
+  };
+  setInterval(check, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+}
+
 // A shared Recess (behind Dex): who is signed in, as the Kubernetes API server sees them, and
 // a way out, on a line under the brand at the top left. A session that has ended sends the
-// page to sign in again. On your own machine, /api/config names no user and nothing is shown.
+// page to "Login to Recess". On your own machine, /api/config names no user and nothing is shown.
 async function showSignedInUser() {
   let r;
   try { r = await fetch('/api/config'); } catch { return; }
   if (r.status === 401) {
-    location.assign('/auth/login?next=' + encodeURIComponent(location.pathname + location.search));
+    goSignIn(r);
     return;
   }
   if (!r.ok) return;
@@ -144,7 +166,7 @@ async function showSignedInUser() {
   out.textContent = 'Sign out';
   out.addEventListener('click', async () => {
     await fetch('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    location.assign('/');
+    location.assign('/auth/ended?why=out');
   });
   box.append(who, out);
   // The brand and this line stack, as one block at the bar's left.
@@ -152,6 +174,7 @@ async function showSignedInUser() {
   stack.className = 'brand-stack';
   brand.replaceWith(stack);
   stack.append(brand, box);
+  watchSession();
 }
 
 // A copy-to-clipboard button, for the output box of either page: the two-sheet icon, a check for a moment once copied. `text`
