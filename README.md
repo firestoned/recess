@@ -85,11 +85,12 @@ in the session file, newest first, with how each ended (exit code, failure, stil
 
 ## The 3D page
 
-The View menu at the top of every page picks what it shows: **Classic** (your run as stage
-cards), **AgentSandbox** (your run as a 3D journey; `--view agentsandbox`), **AgentSandbox Admin**
+The View menu at the top of every page picks what it shows: **AgentSandbox** (your run as a 3D
+journey; `--view agentsandbox`, the default), **AgentSandbox Admin**
 (every live agent in the cluster; `--view admin`, or `/admin`) or **Kubernetes** (the whole
 cluster as your RBAC shows it; `--view kubernetes`, or `/kubernetes`). The names they had before,
-`wired-3d` and `watch` (and `/watch`), are still accepted.
+`wired-3d` and `watch` (and `/watch`), are still accepted, and `classic` (the stage-card page,
+now gone) opens AgentSandbox.
 They share the same API and guards, and your run lives on the server, so switching in the
 middle of a run reloads the page onto it; the choice is remembered, and `--view`
 (`RECESS_VIEW`; `--theme` and `RECESS_THEME` are its old names) sets the one a browser sees
@@ -444,7 +445,7 @@ empty, `0`, `false`, `no` or `off`), so a config file or a shell can carry all o
 | `--gateway-prefix` | `RECESS_GATEWAY_PREFIX` | `gateway-` |
 | `--no-gateways` | `RECESS_NO_GATEWAYS` | false |
 | `--listen` (web) | `RECESS_LISTEN` | `127.0.0.1:7480` |
-| `--view` (web) | `RECESS_VIEW` | `classic` (or `agentsandbox`, `admin`, `kubernetes`) |
+| `--view` (web) | `RECESS_VIEW` | `agentsandbox` (or `admin`, `kubernetes`) |
 | `--no-open` (web) | `RECESS_NO_OPEN` | false |
 | `--demo` | `RECESS_DEMO` | false |
 | (demo only) | `RECESS_DEMO_PACE` | 1 (slower above, 0.1 to 10) |

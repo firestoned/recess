@@ -9,7 +9,7 @@ How Recess is run today, and how that changes as it grows.
 ## Mission
 
 Recess shows a workload going through mediatore, from minting the token to the exit code,
-with every secret on the map: in a browser (Classic, AgentSandbox and Admin views) and in a
+with every secret on the map: in a browser (AgentSandbox, AgentSandbox Admin and Kubernetes views) and in a
 terminal. It is a window onto mediatore, not a part of its trust path.
 
 ## Roles

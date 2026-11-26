@@ -42,12 +42,6 @@ const COOKIE: &str = "recess";
 /// The pages' scripts and stylesheets, served behind the cookie like the API: path, type, body.
 const ASSETS: &[(&str, &str, &str)] = &[
     (
-        "/app.js",
-        "text/javascript",
-        include_str!("../assets/app.js"),
-    ),
-    ("/app.css", "text/css", include_str!("../assets/app.css")),
-    (
         "/signin.css",
         "text/css",
         include_str!("../assets/signin.css"),
@@ -97,7 +91,6 @@ const ASSETS: &[(&str, &str, &str)] = &[
 /// The page for each view.
 const fn page(view: View) -> &'static str {
     match view {
-        View::Classic => include_str!("../assets/index.html"),
         View::AgentSandbox => include_str!("../assets/agentsandbox.html"),
         View::Admin => include_str!("../assets/admin.html"),
         View::Kubernetes => include_str!("../assets/kubernetes.html"),
@@ -112,11 +105,10 @@ const OLD_VIEW_COOKIE: &str = "recess-theme";
 /// What the page shows. The API behind every view is the same, so switching keeps the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum View {
-    /// Your run, as stage cards.
-    Classic,
     /// Your run as a wireframe 3D journey: the request sealed into an envelope and carried
-    /// through the issuer, the broker, the Kubernetes API and the sandbox VM.
-    #[value(name = "agentsandbox", alias = "wired-3d")]
+    /// through the issuer, the broker, the Kubernetes API and the sandbox VM. Also answers to
+    /// `classic`, the stage-card page it replaced.
+    #[value(name = "agentsandbox", aliases = ["wired-3d", "classic"])]
     AgentSandbox,
     /// Every live agent in the cluster, in the same 3D theatre; read-only.
     #[value(alias = "watch")]
@@ -127,28 +119,22 @@ pub enum View {
 }
 
 impl View {
-    const ALL: [Self; 4] = [
-        Self::Classic,
-        Self::AgentSandbox,
-        Self::Admin,
-        Self::Kubernetes,
-    ];
+    const ALL: [Self; 3] = [Self::AgentSandbox, Self::Admin, Self::Kubernetes];
 
     /// The name in `--view`, `?view=` and the cookie.
     const fn slug(self) -> &'static str {
         match self {
-            Self::Classic => "classic",
             Self::AgentSandbox => "agentsandbox",
             Self::Admin => "admin",
             Self::Kubernetes => "kubernetes",
         }
     }
 
-    /// A view by its name, or by the name it had before (`wired-3d`, `watch`): links, cookies
-    /// and config files from then keep working.
+    /// A view by its name, or by the name it had before (`wired-3d`, `watch`), or `classic`,
+    /// the page that is gone: links, cookies and config files from then keep working.
     fn from_slug(s: &str) -> Option<Self> {
         let s = match s {
-            "wired-3d" => "agentsandbox",
+            "wired-3d" | "classic" => "agentsandbox",
             "watch" => "admin",
             other => other,
         };
@@ -1652,7 +1638,6 @@ mod tests {
 
     #[test]
     fn the_two_pages_differ_and_share_the_cli_previews() {
-        assert_ne!(page(View::Classic), page(View::AgentSandbox));
         assert_ne!(page(View::AgentSandbox), page(View::Admin));
         assert_ne!(page(View::Admin), page(View::Kubernetes));
         for view in View::ALL {
@@ -1685,28 +1670,34 @@ mod tests {
         let none = HeaderMap::new();
         let picked = headers("recess=k; recess-view=admin");
         let picked_before = headers("recess=k; recess-theme=wired-3d");
-        assert_eq!(pick(View::Classic, None, &none), View::Classic);
-        assert_eq!(pick(View::Classic, None, &picked), View::Admin);
+        assert_eq!(pick(View::Kubernetes, None, &none), View::Kubernetes);
+        assert_eq!(pick(View::Kubernetes, None, &picked), View::Admin);
         assert_eq!(
-            pick(View::Classic, None, &picked_before),
+            pick(View::Kubernetes, None, &picked_before),
             View::AgentSandbox,
             "the old cookie, and the old name in it, are still read"
         );
         assert_eq!(
-            pick(View::Classic, Some("watch"), &none),
+            pick(View::Kubernetes, Some("watch"), &none),
             View::Admin,
             "the old name in a link"
         );
         assert_eq!(
-            pick(View::AgentSandbox, Some("classic"), &picked),
-            View::Classic
+            pick(View::Admin, Some("classic"), &picked),
+            View::AgentSandbox,
+            "the page that is gone, in a link, opens the run's 3D view"
+        );
+        assert_eq!(
+            pick(View::Admin, None, &headers("recess=k; recess-view=classic")),
+            View::AgentSandbox,
+            "and so does its name in the cookie"
         );
         assert_eq!(
             pick(View::AgentSandbox, Some("bogus"), &none),
             View::AgentSandbox
         );
         assert_eq!(
-            pick(View::Classic, Some("kubernetes"), &none),
+            pick(View::AgentSandbox, Some("kubernetes"), &none),
             View::Kubernetes
         );
     }

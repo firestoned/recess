@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
-// Recess in wire: the same run as the classic page (the same /api), drawn as a journey.
+// Recess in wire: your run (the /api), drawn as a journey.
 // The request is written on a sheet (the issuer, then the workload, login first as the CLI),
 // crumpled into an envelope with a lock, carried to the broker and the Kubernetes API, sealed,
 // carried to the sandbox VM, unwrapped into the jail, and its exit code shown at the end.

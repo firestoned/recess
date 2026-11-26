@@ -671,14 +671,13 @@ async fn open_output(
 ) -> Result<reqwest::Response, String> {
     let path = crate::engine::session_path().map_err(|e| format!("no mediatore session: {e}"))?;
     let session = mediatore_client::Session::load(&path).map_err(|_| {
-        "no mediatore session on this machine: sign in first (in the Classic or AgentSandbox view); \
+        "no mediatore session on this machine: sign in first (in the AgentSandbox view); \
          the broker shows a sandbox's output only to its owner"
             .to_owned()
     })?;
     if !session.is_fresh(30) {
         return Err(
-            "your mediatore session has expired: sign in again (in the Classic or AgentSandbox view)"
-                .into(),
+            "your mediatore session has expired: sign in again (in the AgentSandbox view)".into(),
         );
     }
     let api = crate::engine::user_api(claim).map_err(|e| format!("{e:#}"))?;

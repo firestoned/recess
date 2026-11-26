@@ -276,7 +276,7 @@ pub const TEMPLATE: &str = r#"# Recess config: KEY=VALUE, the mediatore CLI's ow
 #RECESS_GATEWAY_PREFIX=gateway-
 #RECESS_NO_GATEWAYS=false
 #RECESS_LISTEN=127.0.0.1:7480
-#RECESS_VIEW=classic
+#RECESS_VIEW=agentsandbox
 #RECESS_NO_OPEN=false
 # Shared behind Dex: everyone signs in, and the cluster is read with their own token
 # (deploy/README.md). Unset, the server is yours alone, on loopback.
