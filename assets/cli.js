@@ -111,28 +111,50 @@ document.addEventListener('DOMContentLoaded', () => {
   pick.addEventListener('change', () => {
     location.assign('/?view=' + encodeURIComponent(pick.value));
   });
-  showSignedInUser(pick);
+  showSignedInUser();
 });
 
+// Where a page without a live session goes: the server says (the "Login to Recess" page when
+// a session has ended, else the issuer), and the page comes back here after.
+async function goSignIn(r) {
+  let to = '/auth/login';
+  try { to = (await r.json()).signIn || to; } catch { /* the default */ }
+  const sep = to.includes('?') ? '&' : '?';
+  location.assign(to + sep + 'next=' + encodeURIComponent(location.pathname + location.search));
+}
+
+// A shared Recess: ask now and then whether this browser is still signed in, and when the
+// tab comes back into view. Asking does not count as use, so an idle session still ends; when
+// it has, the page shows "Login to Recess" rather than a picture that has stopped.
+function watchSession() {
+  const check = async () => {
+    let r;
+    try { r = await fetch('/auth/session', { cache: 'no-store' }); } catch { return; }
+    if (r.status === 401) goSignIn(r);
+  };
+  setInterval(check, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+}
+
 // A shared Recess (behind Dex): who is signed in, as the Kubernetes API server sees them, and
-// a way out. A session that has ended sends the page to sign in again. On your own machine,
-// /api/config names no user and nothing is shown.
-async function showSignedInUser(near) {
+// a way out, on a line under the brand at the top left. A session that has ended sends the
+// page to "Login to Recess". On your own machine, /api/config names no user and nothing is shown.
+async function showSignedInUser() {
   let r;
   try { r = await fetch('/api/config'); } catch { return; }
   if (r.status === 401) {
-    location.assign('/auth/login?next=' + encodeURIComponent(location.pathname + location.search));
+    goSignIn(r);
     return;
   }
   if (!r.ok) return;
   const cfg = await r.json();
   const u = cfg.user;
-  if (!u) return;
-  const box = document.createElement('span');
+  const brand = document.querySelector('.brand');
+  if (!u || !brand) return;
+  const box = document.createElement('div');
   box.className = 'signed-in';
-  box.style.marginLeft = '0.75em';
-  box.style.whiteSpace = 'nowrap';
   const who = document.createElement('span');
+  who.className = 'who-name';
   who.textContent = u.name;
   const groups = (u.kubeGroups && u.kubeGroups.length ? u.kubeGroups : u.groups) || [];
   who.title = 'Kubernetes sees you as ' + (u.kubeUser || u.name) +
@@ -140,14 +162,19 @@ async function showSignedInUser(near) {
     '\nEvery read here is made with your own token, under your RBAC.';
   const out = document.createElement('button');
   out.type = 'button';
+  out.className = 'ghost small';
   out.textContent = 'Sign out';
-  out.style.marginLeft = '0.5em';
   out.addEventListener('click', async () => {
     await fetch('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    location.assign('/');
+    location.assign('/auth/ended?why=out');
   });
   box.append(who, out);
-  near.insertAdjacentElement('afterend', box);
+  // The brand and this line stack, as one block at the bar's left.
+  const stack = document.createElement('div');
+  stack.className = 'brand-stack';
+  brand.replaceWith(stack);
+  stack.append(brand, box);
+  watchSession();
 }
 
 // A copy-to-clipboard button, for the output box of either page: the two-sheet icon, a check for a moment once copied. `text`

@@ -347,3 +347,13 @@ input:disabled, textarea:disabled { color: var(--muted); }
 :root { --spire: #2dd4bf; }
 .lbl.spire b { color: var(--muted); }
 .lbl.spire.lit b { color: var(--spire); }
+
+/* Who is signed in (a shared Recess), under the brand at the top left. */
+.brand-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.signed-in { display: flex; align-items: center; gap: 8px; white-space: nowrap; max-width: 100%; }
+.signed-in .who-name { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; cursor: help; }
+.signed-in .who-name { font-family: var(--mono); letter-spacing: .04em; }
+/* In the 3D views' bar, the brand keeps the status buttons' line: who is signed in hangs
+   below it, out of the bar's flow. */
+.bar .brand-stack { position: relative; }
+.bar .signed-in { position: absolute; top: 100%; left: 0; margin-top: 5px; max-width: none; }

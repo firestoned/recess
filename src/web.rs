@@ -48,6 +48,11 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ),
     ("/app.css", "text/css", include_str!("../assets/app.css")),
     (
+        "/signin.css",
+        "text/css",
+        include_str!("../assets/signin.css"),
+    ),
+    (
         "/cli.js",
         "text/javascript",
         include_str!("../assets/cli.js"),
@@ -179,6 +184,8 @@ struct App {
 /// What the shared mode needs at hand.
 struct Sharing {
     sessions: Arc<Sessions>,
+    /// The public URL, without a trailing slash: where browsers are sent to sign in.
+    public: String,
     host: String,
     /// Cookies get `Secure` when the public URL is https.
     secure: bool,
@@ -207,8 +214,14 @@ pub async fn serve(
     sign_in: signin::Settings,
 ) -> anyhow::Result<()> {
     let shared = if sign_in.enabled() {
+        // Never any access of its own: every read is the signed-in person's.
+        signin::holds_no_access(std::path::Path::new(signin::SERVICE_ACCOUNT_TOKEN))?;
         let public = signin::public_url(&sign_in.public_url)?;
+        if let Some(w) = signin::port_mismatch(&public, listen) {
+            eprintln!("warning: {w}");
+        }
         let provider = signin::Provider::discover(sign_in).await?;
+        // Only the cluster's address and CA are kept from this: its credentials are dropped.
         let base = if demo {
             kube::Config::new("https://kubernetes.invalid".parse()?)
         } else {
@@ -225,6 +238,7 @@ pub async fn serve(
         Some(Sharing {
             sessions,
             host: signin::public_host(&public),
+            public: public.clone(),
             secure: public.starts_with("https://"),
         })
     } else {
@@ -259,8 +273,8 @@ pub async fn serve(
     let addr = listener.local_addr()?;
     if let Some(sh) = &app.shared {
         eprintln!(
-            "recess on http://{addr}, served as {}; everyone signs in with {}",
-            sh.host,
+            "recess on http://{addr}, open {}; everyone signs in with {}",
+            sh.public,
             sh.sessions.provider.issuer()
         );
     } else {
@@ -299,6 +313,8 @@ pub async fn serve(
         // Its address before the rename, for links and bookmarks.
         .route("/watch", get(|| async { Redirect::permanent("/admin") }))
         .route("/auth/login", get(sign_in_start))
+        .route("/auth/ended", get(session_ended))
+        .route("/auth/session", get(session_check))
         .route(signin::CALLBACK, get(sign_in_callback))
         .merge(api)
         .layer(middleware::from_fn_with_state(app.clone(), guard))
@@ -396,6 +412,16 @@ async fn guard(State(app): State<Shared>, req: Request, next: Next) -> Response 
     if !allowed {
         return (StatusCode::FORBIDDEN, "forbidden host").into_response();
     }
+    // Shared, at another loopback name (127.0.0.1 for localhost): cookies belong to the name a
+    // browser used, and the issuer answers at the public URL, so a sign-in started here could
+    // never finish. Pages go to the public URL first.
+    if let Some(sh) = &app.shared
+        && !host.eq_ignore_ascii_case(&sh.host)
+        && (req.method() == axum::http::Method::GET || req.method() == axum::http::Method::HEAD)
+    {
+        let pq = req.uri().path_and_query().map_or("/", |p| p.as_str());
+        return Redirect::temporary(&format!("{}{pq}", sh.public)).into_response();
+    }
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
     h.insert(
@@ -443,11 +469,7 @@ fn user_of(app: &App, headers: &HeaderMap) -> Option<Arc<User>> {
 async fn require_access(State(app): State<Shared>, mut req: Request, next: Next) -> Response {
     if app.shared.is_some() {
         let Some(user) = user_of(&app, req.headers()) else {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "sign in first", "signIn": "/auth/login"})),
-            )
-                .into_response();
+            return signed_out(&app, req.headers());
         };
         req.extensions_mut().insert(user);
     } else if !has_cookie(&app, req.headers()) {
@@ -511,7 +533,7 @@ async fn index(
 ) -> Response {
     if app.shared.is_some() {
         if user_of(&app, &headers).is_none() {
-            return to_sign_in(&uri);
+            return to_sign_in(&app, &headers, &uri);
         }
     } else if let Some(t) = q.t.as_deref() {
         // The key leaves the address bar; a view asked for with it stays.
@@ -587,7 +609,7 @@ fn own_page(
 ) -> Response {
     if app.shared.is_some() {
         if user_of(app, headers).is_none() {
-            return to_sign_in(uri);
+            return to_sign_in(app, headers, uri);
         }
     } else if let Some(t) = q.t.as_deref() {
         return trade_key(app, t, &format!("/{}", view.slug()));
@@ -627,15 +649,11 @@ async fn admin_events(
         } else if app.demo {
             tokio::spawn(crate::admin::demo(fleet.clone()));
         } else {
-            match app
-                .kube_client
-                .get_or_try_init(|| crate::engine::kube_client(&app.kube))
-                .await
-            {
+            match own_client(&app).await {
                 Ok(c) => {
                     crate::admin::spawn(&fleet, c, app.kube.broker_namespace.clone());
                 }
-                Err(e) => fleet.note("cluster", &format!("kube: {e:#}")),
+                Err(e) => fleet.note("cluster", &e),
             }
         }
     }
@@ -662,15 +680,11 @@ async fn kubernetes_events(
         } else if let Some(u) = &user {
             u.hold(crate::cluster::spawn(&fleet, &u.client));
         } else {
-            match app
-                .kube_client
-                .get_or_try_init(|| crate::engine::kube_client(&app.kube))
-                .await
-            {
+            match own_client(&app).await {
                 Ok(c) => {
                     crate::cluster::spawn(&fleet, c);
                 }
-                Err(e) => fleet.note("cluster", &format!("kube: {e:#}")),
+                Err(e) => fleet.note("cluster", &e),
             }
         }
     }
@@ -683,10 +697,18 @@ async fn kube_for(app: &App, user: Option<&User>) -> Result<kube::Client, String
     if let Some(u) = user {
         return Ok(u.client.clone());
     }
+    own_client(app).await.cloned()
+}
+
+/// The server's own client: your kubeconfig, on your machine alone. A shared Recess has none,
+/// by design: it holds no access of its own, and reads with each signed-in person's token.
+async fn own_client(app: &App) -> Result<&kube::Client, String> {
+    if app.shared.is_some() {
+        return Err("a shared Recess holds no access of its own: sign in".to_owned());
+    }
     app.kube_client
         .get_or_try_init(|| crate::engine::kube_client(&app.kube))
         .await
-        .cloned()
         .map_err(|e| format!("kube: {e:#}"))
 }
 
@@ -895,12 +917,117 @@ fn no_runs(app: &App) -> Option<Response> {
     })
 }
 
-/// Off to the issuer, and back to `uri` after.
-fn to_sign_in(uri: &axum::http::Uri) -> Response {
+/// `path?query`, with each value form-encoded.
+fn with_query(path: &str, pairs: &[(&str, &str)]) -> String {
+    let mut u = reqwest::Url::parse("http://x/").expect("a constant URL");
+    u.query_pairs_mut().extend_pairs(pairs);
+    format!("{path}?{}", u.query().unwrap_or_default())
+}
+
+/// Whether this browser holds a session cookie the server no longer has a session for: it
+/// expired (its token, unrefreshed), went idle, was signed out elsewhere, or the server
+/// restarted.
+fn session_gone(app: &App, headers: &HeaderMap) -> bool {
+    app.shared.is_some()
+        && cookie(headers, signin::SESSION_COOKIE).is_some_and(|c| !c.is_empty())
+        && user_of(app, headers).is_none()
+}
+
+/// The session cookie, cleared.
+fn clear_session(app: &App, r: &mut Response) {
+    if let Some(sh) = &app.shared {
+        set_cookie(
+            r,
+            &signin::cookie(signin::SESSION_COOKIE, "", sh.secure, Some(0)),
+        );
+    }
+}
+
+/// Off to sign in, and back to `uri` after. A session that has ended is logged out and shown
+/// the "Login to Recess" page; a first visit goes straight to the issuer.
+fn to_sign_in(app: &App, headers: &HeaderMap, uri: &axum::http::Uri) -> Response {
     let next = uri.path_and_query().map_or("/", |p| p.as_str());
-    let mut u = reqwest::Url::parse("http://x/auth/login").expect("a constant URL");
-    u.query_pairs_mut().append_pair("next", next);
-    Redirect::to(&format!("/auth/login?{}", u.query().unwrap_or_default())).into_response()
+    if session_gone(app, headers) {
+        let mut r = Redirect::to(&with_query(
+            "/auth/ended",
+            &[("why", "expired"), ("next", next)],
+        ))
+        .into_response();
+        clear_session(app, &mut r);
+        return r;
+    }
+    Redirect::to(&with_query("/auth/login", &[("next", next)])).into_response()
+}
+
+/// The API's answer without a live session: 401, with where the page should go. A session
+/// that has ended is logged out, and the page shows "Login to Recess".
+fn signed_out(app: &App, headers: &HeaderMap) -> Response {
+    let gone = session_gone(app, headers);
+    let mut r = (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({
+            "error": if gone { "your session has ended" } else { "sign in first" },
+            "signIn": if gone { "/auth/ended?why=expired" } else { "/auth/login" },
+        })),
+    )
+        .into_response();
+    if gone {
+        clear_session(app, &mut r);
+    }
+    r
+}
+
+#[derive(Deserialize)]
+struct EndedQuery {
+    why: Option<String>,
+    next: Option<String>,
+}
+
+/// `/auth/ended`: the "Login to Recess" page, after a session ends or a sign-out. Nothing on
+/// it comes from the request but `next`, which is made a path on this server and encoded.
+async fn session_ended(State(app): State<Shared>, Query(q): Query<EndedQuery>) -> Response {
+    if app.shared.is_none() {
+        return (StatusCode::NOT_FOUND, "no sign-in on this server").into_response();
+    }
+    let why = match q.why.as_deref() {
+        Some("out") => "You signed out.",
+        _ => {
+            "Your session has ended: its sign-in expired and could not be renewed, it sat idle, \
+             or the server restarted."
+        }
+    };
+    let next = signin::safe_next(q.next.as_deref().unwrap_or("/"));
+    let login = with_query("/auth/login", &[("next", &next)]);
+    let body = include_str!("../assets/signin.html")
+        .replace("{{WHY}}", why)
+        .replace("{{LOGIN}}", &login);
+    let mut r = (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response();
+    clear_session(&app, &mut r);
+    r
+}
+
+/// `/auth/session`: whether this browser is still signed in, for an open page to ask now and
+/// then. Asking does not count as use, so an open tab does not keep an idle session alive.
+async fn session_check(State(app): State<Shared>, headers: HeaderMap) -> Response {
+    let Some(sh) = &app.shared else {
+        return Json(json!({"shared": false})).into_response();
+    };
+    let live = cookie(&headers, signin::SESSION_COOKIE)
+        .and_then(|sid| sh.sessions.live(sid))
+        .is_some();
+    if live {
+        Json(json!({"shared": true, "live": true})).into_response()
+    } else {
+        signed_out(&app, &headers)
+    }
 }
 
 #[derive(Deserialize)]
@@ -969,12 +1096,21 @@ async fn sign_in_callback(
     let (Some(code), Some(state)) = (q.code.as_deref(), q.state.as_deref()) else {
         return sign_in_failed("the issuer's answer has no code");
     };
-    let bound = cookie(&headers, signin::LOGIN_COOKIE).is_some_and(|c| {
-        aws_lc_rs::constant_time::verify_slices_are_equal(c.as_bytes(), state.as_bytes()).is_ok()
-    });
+    let Some(started) = cookie(&headers, signin::LOGIN_COOKIE) else {
+        return sign_in_failed(&format!(
+            "this browser has no sign-in in flight here. It was started at another address \
+             (open {} itself, not another name for it), the server restarted, or it took over \
+             ten minutes",
+            sh.public
+        ));
+    };
+    let bound =
+        aws_lc_rs::constant_time::verify_slices_are_equal(started.as_bytes(), state.as_bytes())
+            .is_ok();
     let Some(pending) = sh.sessions.take(state).filter(|_| bound) else {
         return sign_in_failed(
-            "this answer is not for a sign-in this browser started (or it took over ten minutes)",
+            "this answer is not for the sign-in this browser started: a newer one replaced it, \
+             the server restarted, or it took over ten minutes",
         );
     };
     let tokens = match sh.sessions.provider.finish(&pending, code).await {
@@ -1155,13 +1291,9 @@ async fn recent(State(app): State<Shared>, user: Option<Extension<Arc<User>>>) -
             (issuer, ids)
         })
         .unwrap_or_default();
-    let client = match app
-        .kube_client
-        .get_or_try_init(|| crate::engine::kube_client(&app.kube))
-        .await
-    {
+    let client = match own_client(&app).await {
         Ok(c) => c.clone(),
-        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("kube: {e:#}")),
+        Err(e) => return err(StatusCode::BAD_GATEWAY, e),
     };
     match crate::kubeinfo::recent_sandboxes(client, &ns, &issuer, &ids, 12).await {
         Ok(items) => {

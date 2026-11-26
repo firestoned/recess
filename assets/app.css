@@ -608,3 +608,8 @@ main { max-width: 1240px; }
 .view-pick select { background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: 12px var(--sans); }
 .view-pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* Who is signed in (a shared Recess), under the brand at the top left. */
+.brand-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.signed-in { display: flex; align-items: center; gap: 8px; white-space: nowrap; max-width: 100%; }
+.signed-in .who-name { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; cursor: help; }
+.signed-in button { padding: 2px 8px; font-size: 11px; }

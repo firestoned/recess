@@ -16,6 +16,11 @@
 >
 > The RBAC files in `deploy/` are for **people** (their users or groups). Never put the
 > `recess` ServiceAccount in their subjects.
+>
+> Recess enforces what it can: with `--oidc-issuer`, it refuses to start if a ServiceAccount
+> token is mounted, drops any credentials from its kubeconfig (it keeps only the API server's
+> address and CA), and never builds a client of its own. On your own machine, without an
+> issuer, it is not shared: it reads with your kubeconfig, as you.
 
 Run this way, Recess is a page your team opens to watch every live agent (the Admin view) and
 the cluster itself (the Kubernetes view).
@@ -129,12 +134,19 @@ gh attestation verify oci://ghcr.io/firestoned/recess:0.1.0 --repo firestoned/re
 1. A visitor without a session is sent to `/auth/login`. That starts the authorization code
    flow with PKCE, binds its `state` to the browser with a cookie, and redirects to Dex.
 2. Dex redirects back to `/auth/callback`. Recess trades the code for tokens and checks the ID
-   token: the issuer, the audience, the authorized party, the expiry and the nonce. It then asks
+   token: its signature against Dex's published keys (fetched again when a token names a key
+   not yet seen, as after a rotation; only asymmetric algorithms, never `none`), then the
+   issuer, the audience, the authorized party, the expiry, not-before and the nonce. It then asks
    the API server who the token makes them (a SelfSubjectReview). A token the API server will
    not take is refused right there, with the reason.
 3. The tokens stay on the server, keyed by a random `HttpOnly` cookie. The ID token is
-   refreshed before it expires (with `offline_access`). Signing out, 12 idle hours, or a
-   refused refresh ends the session and stops its watches.
+   refreshed before it expires (with `offline_access`), and every refreshed token is checked
+   as in step 2. Signing out, 12 idle hours, or a token that expires without a refresh Dex
+   accepts ends the session and stops its watches.
+4. A page whose session has ended is logged out and shown **Login to Recess**, as is a
+   sign-out. An open page asks every 30 seconds (and when its tab comes back into view)
+   whether it is still signed in; asking does not count as use, so an idle session still
+   ends.
 
 Sessions live in memory: a restart signs everyone out, and the Deployment has one replica.
 
@@ -145,10 +157,16 @@ on your own machine, is off here: nothing is written, so the root filesystem sta
 
 Without `--oidc-issuer`, nothing changes. Recess listens on loopback only, the printed link
 carries its key, and the cluster is read with your kubeconfig. You can also try the sign-in
-locally against a Dex whose `kubernetes` client is public, since Dex accepts any
-`http://localhost` redirect for a public client:
+locally against your Dex. The public URL is this server, so its port is the one it listens on
+(7480 unless `--listen` says otherwise):
 
 ```sh
-recess web --view admin --listen 127.0.0.1:7491 \
-  --oidc-issuer https://dex.bar.foo.io --public-url http://localhost:7491
+recess web --view admin \
+  --oidc-issuer https://dex.bar.foo.io --public-url http://localhost:7480
 ```
+
+Dex must accept `http://localhost:7480/auth/callback` as the client's redirect. A public
+client that lists no `redirectURIs` accepts any `http://localhost` one. Most `kubernetes`
+clients list kubelogin's (`http://localhost:8000`, `http://localhost:18000`), and then Dex
+accepts only what is listed and answers "Unregistered redirect_uri": add the callback to the
+list.
