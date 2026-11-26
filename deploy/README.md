@@ -89,8 +89,10 @@ The Kubernetes view needs nothing more of Recess. A person sees what their own b
 them list across the cluster: people who already hold `view` or their own read roles see
 their namespaces and pods with no change. For those who do not:
 
-- [`kubernetes-rbac.yaml`](kubernetes-rbac.yaml): namespaces and pods, plus the custom
-  resources' groups you list in it (a wildcard group would match Secrets too).
+- [`kubernetes-rbac.yaml`](kubernetes-rbac.yaml): namespaces, pods and ConfigMaps (the pin
+  boards), the admission policies with their bindings, Events and `/metrics` (their hits and
+  the cupboard), plus the custom resources' groups you list in it (a wildcard group would
+  match Secrets too).
 - [`kubernetes-secrets-rbac.yaml`](kubernetes-secrets-rbac.yaml): the vaults. Recess lists
   Secrets as metadata only and reads a value only when a drawer is opened, but RBAC cannot
   grant less than `get`, `list` and `watch`, which read every value by other means.

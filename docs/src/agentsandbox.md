@@ -15,5 +15,5 @@
 {%
   include-markdown "../../README.md"
   start="### Recording it"
-  end="## The Admin view"
+  end="## The AgentSandbox Admin view"
 %}

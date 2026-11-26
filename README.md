@@ -85,11 +85,12 @@ in the session file, newest first, with how each ended (exit code, failure, stil
 
 ## The 3D page
 
-The View menu at the top of every page picks what it shows: **Classic** (your run as stage
-cards), **AgentSandbox** (your run as a 3D journey; `--view agentsandbox`), **Admin**
+The View menu at the top of every page picks what it shows: **AgentSandbox** (your run as a 3D
+journey; `--view agentsandbox`, the default), **AgentSandbox Admin**
 (every live agent in the cluster; `--view admin`, or `/admin`) or **Kubernetes** (the whole
 cluster as your RBAC shows it; `--view kubernetes`, or `/kubernetes`). The names they had before,
-`wired-3d` and `watch` (and `/watch`), are still accepted.
+`wired-3d` and `watch` (and `/watch`), are still accepted, and `classic` (the stage-card page,
+now gone) opens AgentSandbox.
 They share the same API and guards, and your run lives on the server, so switching in the
 middle of a run reloads the page onto it; the choice is remembered, and `--view`
 (`RECESS_VIEW`; `--theme` and `RECESS_THEME` are its old names) sets the one a browser sees
@@ -188,14 +189,14 @@ A station moves across the floor while the camera looks down on it, and in the u
 facing you while the camera looks level (as on AgentSandbox's first view, with sheet 01 square
 to you): that is how the OIDC tower goes up or down beside the login form. Its label and its
 edges go with it, and so does whatever stands on it: the VM takes its guest agent, egress
-proxy, gateways and audiences; your card takes its rolodex. In Admin, a namespace moves whole: an
+proxy, gateways and audiences; your card takes its rolodex. In AgentSandbox Admin, a namespace moves whole: an
 agent, or its plot's name, takes the plot with every agent on it; a VM, a pool's name, or the
 yard's name takes that namespace's yard of pools with every rack and VM in it (a rack never
 leaves its yard). The gateways move as one column with their circle, and the audiences as one
 block. Names are grabbed the same way as the things they name. Policies, providers and the
 base stations move one at a time. To move several together, in either view, mark them first
 (Cmd-click each, or a Shift-Cmd square round them): a move of any marked one carries them all,
-each still saved under its own key. In Admin a mark takes the whole group, as a move does. The camera stays put while you move something.
+each still saved under its own key. In AgentSandbox Admin a mark takes the whole group, as a move does. The camera stays put while you move something.
 
 Each move is saved as you let go, to `layout.json` beside `config.env`
 (`$XDG_CONFIG_HOME/recess/`, else `~/.config/recess/`): per view, an offset from where the code
@@ -211,15 +212,24 @@ the layout is the one shipped and the "ctrl- or ⌥-drag to move" hint is not sh
 
 ### Recording it
 
-`make record` rebuilds the GIF and MP4 above: it runs the demo with placeholder values only
-(an empty config, `example.com` URLs), drives it in headless Chrome
-(`scripts/record-agentsandbox.mjs`) and encodes with ffmpeg. It needs node, ffmpeg and Chrome or
-Chromium (`CHROME` names the binary). `RECESS_DEMO_PACE` slows the demo (3 for the
-recording; 1, the default, is the scripted speed).
+`make record` rebuilds the GIF and MP4 of each view (the one above, and those of
+[Admin](#the-agentsandbox-admin-view) and [Kubernetes](#the-kubernetes-view)): it runs the demo
+with placeholder values only (an empty config, `example.com` URLs), drives each view in headless
+Chrome as a person would (`scripts/record-<view>.mjs`) and encodes with ffmpeg
+(`scripts/record.sh`). `make record VIEWS=kubernetes` records only the views named. It needs
+node, ffmpeg and Chrome or Chromium (`CHROME` names the binary). `RECESS_DEMO_PACE` slows the
+AgentSandbox demo (3 for the recording; 1, the default, is the scripted speed). `RECORD_URL`
+records from a demo already running instead of building one, for instance on a build host behind
+an SSH tunnel: give it the sign-in link the demo printed.
 
-## The Admin view
+## The AgentSandbox Admin view
 
-Admin (`--view admin`, `/admin`) shows every live agent your kubeconfig may see, in the same theatre as your run. East of
+![recess web, AgentSandbox Admin view: every live agent in its namespace, one followed to its gateway and its output, then its policy, a pool of VMs and the host under them](docs/media/admin.gif)
+
+*`recess web --view admin --demo`, at 1.9× speed. The whole tour at real speed:
+[docs/media/admin.mp4](docs/media/admin.mp4).*
+
+AgentSandbox Admin (`--view admin`, `/admin`) shows every live agent your kubeconfig may see, in the same theatre as your run. East of
 the Kubernetes API, each namespace is a plot and each AgentSandbox a cage on it: cyan running,
 dashed grey pending, amber with policy gaps, red refused, green exited. The egress gateways
 stand north of them as in AgentSandbox: one column of cyan diamonds in a cyan circle, a gateway
@@ -255,6 +265,11 @@ another object, the status field it was read from, and whether that object still
 
 ## The Kubernetes view
 
+![recess web, Kubernetes view: the cluster's namespaces as rooms, a pod risen on its containers, a Secret's drawer and a ConfigMap's note read, then the admission policies beside the API with their hits flying and the cupboard of what they turned away](docs/media/kubernetes.gif)
+
+*`recess web --view kubernetes --demo`, at 1.6× speed. The whole tour at real speed:
+[docs/media/kubernetes.mp4](docs/media/kubernetes.mp4).*
+
 > **⚠ This view shows the cluster as *your* RBAC allows, never more.** Recess reads with
 > your own credentials (your kubeconfig on your machine, your Dex token when shared) and must
 > never be given any access of its own: see [In a cluster](#in-a-cluster).
@@ -284,7 +299,8 @@ groups left out), are each listed and watched across all namespaces: with your k
 your machine, with your own ID token when Recess is shared behind Dex, so the API server applies
 your RBAC. A kind you may not list cluster-wide is named on the page and tried again at the next
 discovery, every three minutes, which is also when a newly installed CRD appears. Secrets are
-listed as metadata only, and one is read only when you open its drawer. Each kind is one watch, so a cluster with many CRDs holds as many open watches
+listed as metadata only, and one is read only when you open its drawer; ConfigMaps by their keys
+and sizes, a value read only when you ask for it. Each kind is one watch, so a cluster with many CRDs holds as many open watches
 while the page is open.
 
 A room with Secrets has a vault in its east column, as the Secrets vault in AgentSandbox: amber
@@ -300,8 +316,52 @@ its key, and forgotten when you hide it or pick anything else; neither Recess no
 caches it (`Cache-Control: no-store`). A drawer you may not open stays shut, red, with the API
 server's refusal. Esc steps back from a box to its vault.
 
+A room with ConfigMaps has a pin board on its back wall, over the pods, and each ConfigMap is a
+post-it on it. A note's colour says who made it: yellow by hand, pink by Helm (its
+`app.kubernetes.io/managed-by` label or its release annotation), teal by an operator (it has an
+owner). An immutable one is laminated and held by a tack; the rest are stuck on by their
+adhesive strip. A note is bigger the more it holds. Click the board and it rises and opens: red
+string runs from each note to every pod in the room that uses it, as the pods' specs name it (a
+volume, a projected volume, an `env` reference or `envFrom`), and a note no pod uses curls at
+its corner and fades. Click a note and it peels off, with only its own strings: its details list
+the pods that use it and how, and its keys with their sizes. A value is read only when you press
+Show beside its key, with your credentials, and is not cached. A picked pod is strung to the
+notes it uses too, and its details link them. `kube-root-ca.crt`, which Kubernetes puts in every
+namespace, is a small printed notice in the board's corner: alone it makes no board (a
+namespace with nothing else gets no room for it), and it gets its string only while it is
+picked, since every pod mounts it. ConfigMaps are watched whole, but the page gets only each
+one's metadata and its keys' names and sizes (the last-applied annotation, which holds the data
+of one applied with kubectl, is dropped). Esc steps back from a note to its board.
+
+When your RBAC lists ValidatingAdmissionPolicies, they stand east of the API on a dais, each a
+sheet: orange when a binding puts it to work, dashed grey when none does. Their hits are live: a
+pulse flies from the API to a policy each time the API server counts one, green let through,
+amber warned, violet audited, red denied, and the policy glows as it lands. The counts are the
+API server's own, `apiserver_validating_admission_policy_check_total` from its `/metrics`, read
+with your credentials every ten seconds while the page is open and a policy is listed, from when
+Recess began counting. Each API server counts its own: where several share one address, each is
+told apart by its start time and only what it counted since it was last read is added, so a
+failover is not a burst of hits.
+
+What is warned or denied flies on to the cupboard beside them, and stays there. Click it and its
+doors swing open on its shelves: one per namespace, and one, at the top, for any namespace. The
+namespace shelves come from Warning Events, across all namespaces, whose message carries a
+policy's denial or warning (a ReplicaSet, Job or other controller records one where it could not
+create a pod): which policy and binding, on what object, and why. The top shelf holds the API
+server's counts, which name the policy and binding but no namespace and no request, so a denial
+can be on both. A `kubectl apply` refused at your own terminal records no Event, so it is only
+counted. The API server drops an Event after an hour; the cupboard keeps what it read for as long
+as Recess runs (shared, for as long as you are signed in), up to 1000 records and 200 on a shelf,
+the oldest going first. Click a shelf for its records; click a policy for its rules, its
+bindings and their scope, its validations, its hits by binding, and what it turned away.
+
+Without `get` on `/metrics` (a non-resource URL) the hits are not counted and the caption says
+so; without `list` on Events the cupboard has only the counts. Recess makes no admission request
+of its own.
+
 Rooms can be moved and the layout kept, as in the other 3D views (Ctrl- or Option-drag a room
-or anything in it): see [Arranging the theatre](#arranging-the-theatre).
+or anything in it), and so can the Kubernetes API, the admission policies (as one dais) and the
+cupboard, each on its own: see [Arranging the theatre](#arranging-the-theatre).
 
 ## The TUI
 
@@ -385,7 +445,7 @@ empty, `0`, `false`, `no` or `off`), so a config file or a shell can carry all o
 | `--gateway-prefix` | `RECESS_GATEWAY_PREFIX` | `gateway-` |
 | `--no-gateways` | `RECESS_NO_GATEWAYS` | false |
 | `--listen` (web) | `RECESS_LISTEN` | `127.0.0.1:7480` |
-| `--view` (web) | `RECESS_VIEW` | `classic` (or `agentsandbox`, `admin`, `kubernetes`) |
+| `--view` (web) | `RECESS_VIEW` | `agentsandbox` (or `admin`, `kubernetes`) |
 | `--no-open` (web) | `RECESS_NO_OPEN` | false |
 | `--demo` | `RECESS_DEMO` | false |
 | (demo only) | `RECESS_DEMO_PACE` | 1 (slower above, 0.1 to 10) |

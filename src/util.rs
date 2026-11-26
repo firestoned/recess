@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The pure pieces: the workload text field, the ID token's claims for display, and the
-//! AgentSandbox's changes between two watch events.
+//! AgentSandbox's changes between two watch events. And one that is not: [`relisting`], the
+//! watch every Kubernetes view uses.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,6 +12,46 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
+
+/// How long a watch the API server broke waits before it lists afresh.
+const RELIST_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A watch (with kube's backoff) that lists afresh when the API server breaks it mid-stream.
+///
+/// After an error from the API server, kube watches again from the last revision it saw (only a
+/// 410 Gone makes it list again). When the datastore cannot replay that revision, every retry
+/// fails the same way and the watch never moves on: kine, under k0s, answers "etcd event
+/// received with PrevKv=nil" (a 500) for an Event whose earlier version it has dropped. So the
+/// error is passed on, for the page to name, and a few seconds later a new watch lists from
+/// now; its `Init` .. `InitDone` replaces whatever the broken one gave.
+pub fn relisting<K>(
+    api: kube::Api<K>,
+    cfg: kube::runtime::watcher::Config,
+) -> futures::stream::BoxStream<
+    'static,
+    Result<kube::runtime::watcher::Event<K>, kube::runtime::watcher::Error>,
+>
+where
+    K: kube::Resource + Clone + serde::de::DeserializeOwned + std::fmt::Debug + Send + 'static,
+{
+    use futures::StreamExt as _;
+    use kube::runtime::{WatchStreamExt as _, watcher};
+    let fresh = move || watcher(api.clone(), cfg.clone()).default_backoff().boxed();
+    let first = fresh();
+    futures::stream::unfold(
+        (first, false, fresh),
+        |(mut inner, broken, fresh)| async move {
+            if broken {
+                tokio::time::sleep(RELIST_AFTER).await;
+                inner = fresh();
+            }
+            let item = inner.next().await?;
+            let broken = matches!(&item, Err(watcher::Error::WatchError(s)) if s.code != 410);
+            Some((item, (inner, broken, fresh)))
+        },
+    )
+    .boxed()
+}
 
 /// Read the workload field, `IMAGE [ARG...]`, split as a POSIX shell splits words (single
 /// quotes, double quotes, backslash escapes) with no expansion of any kind.

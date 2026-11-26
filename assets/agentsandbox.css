@@ -230,12 +230,12 @@ input:disabled, textarea:disabled { color: var(--muted); }
   .caption.alert { animation: none; }
 }
 
-/* The View menu: which page shows the run (Classic, AgentSandbox, Admin). */
+/* The View menu: which page shows the run (AgentSandbox, AgentSandbox Admin, Kubernetes). */
 .view-pick { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
 .view-pick select { width: auto; border: 1px solid var(--faint); padding: 5px 8px; font: 12px var(--mono); text-transform: none; letter-spacing: 0; }
 .view-pick select:hover, .view-pick select:focus-visible { border-color: var(--wire); outline: none; }
 
-/* The output box and its copy button, top right (the classic page's, in the wire's colours). */
+/* The output box and its copy button, top right. */
 .linewrap { position: relative; flex: 1; min-height: 0; display: flex; }
 .linewrap .lines { padding-right: 46px; }
 .linewrap .copy {

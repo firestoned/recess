@@ -42,12 +42,6 @@ const COOKIE: &str = "recess";
 /// The pages' scripts and stylesheets, served behind the cookie like the API: path, type, body.
 const ASSETS: &[(&str, &str, &str)] = &[
     (
-        "/app.js",
-        "text/javascript",
-        include_str!("../assets/app.js"),
-    ),
-    ("/app.css", "text/css", include_str!("../assets/app.css")),
-    (
         "/signin.css",
         "text/css",
         include_str!("../assets/signin.css"),
@@ -97,7 +91,6 @@ const ASSETS: &[(&str, &str, &str)] = &[
 /// The page for each view.
 const fn page(view: View) -> &'static str {
     match view {
-        View::Classic => include_str!("../assets/index.html"),
         View::AgentSandbox => include_str!("../assets/agentsandbox.html"),
         View::Admin => include_str!("../assets/admin.html"),
         View::Kubernetes => include_str!("../assets/kubernetes.html"),
@@ -112,11 +105,10 @@ const OLD_VIEW_COOKIE: &str = "recess-theme";
 /// What the page shows. The API behind every view is the same, so switching keeps the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum View {
-    /// Your run, as stage cards.
-    Classic,
     /// Your run as a wireframe 3D journey: the request sealed into an envelope and carried
-    /// through the issuer, the broker, the Kubernetes API and the sandbox VM.
-    #[value(name = "agentsandbox", alias = "wired-3d")]
+    /// through the issuer, the broker, the Kubernetes API and the sandbox VM. Also answers to
+    /// `classic`, the stage-card page it replaced.
+    #[value(name = "agentsandbox", aliases = ["wired-3d", "classic"])]
     AgentSandbox,
     /// Every live agent in the cluster, in the same 3D theatre; read-only.
     #[value(alias = "watch")]
@@ -127,28 +119,22 @@ pub enum View {
 }
 
 impl View {
-    const ALL: [Self; 4] = [
-        Self::Classic,
-        Self::AgentSandbox,
-        Self::Admin,
-        Self::Kubernetes,
-    ];
+    const ALL: [Self; 3] = [Self::AgentSandbox, Self::Admin, Self::Kubernetes];
 
     /// The name in `--view`, `?view=` and the cookie.
     const fn slug(self) -> &'static str {
         match self {
-            Self::Classic => "classic",
             Self::AgentSandbox => "agentsandbox",
             Self::Admin => "admin",
             Self::Kubernetes => "kubernetes",
         }
     }
 
-    /// A view by its name, or by the name it had before (`wired-3d`, `watch`): links, cookies
-    /// and config files from then keep working.
+    /// A view by its name, or by the name it had before (`wired-3d`, `watch`), or `classic`,
+    /// the page that is gone: links, cookies and config files from then keep working.
     fn from_slug(s: &str) -> Option<Self> {
         let s = match s {
-            "wired-3d" => "agentsandbox",
+            "wired-3d" | "classic" => "agentsandbox",
             "watch" => "admin",
             other => other,
         };
@@ -301,6 +287,7 @@ pub async fn serve(
         .route("/api/kubernetes", get(kubernetes_events))
         .route("/api/kubernetes/access", get(kubernetes_access))
         .route("/api/kubernetes/secret", get(kubernetes_secret))
+        .route("/api/kubernetes/configmap", get(kubernetes_configmap))
         .route("/auth/logout", post(sign_out))
         .route_layer(middleware::from_fn_with_state(app.clone(), require_access));
     let api = ASSETS.iter().fold(api, |r, &(path, ct, body)| {
@@ -722,8 +709,8 @@ fn no_store(v: serde_json::Value) -> Response {
     r
 }
 
-/// A key in a Secret's data: what may be asked for, and nothing else.
-fn secret_key(s: &str) -> bool {
+/// A key in a Secret's or a ConfigMap's data: what may be asked for, and nothing else.
+fn data_key(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 253
         && s.bytes()
@@ -777,7 +764,7 @@ async fn kubernetes_secret(
     if !kube_name(&q.ns) || !kube_name(&q.name) {
         return err(StatusCode::BAD_REQUEST, "ns and name are Kubernetes names");
     }
-    if q.key.as_deref().is_some_and(|k| !secret_key(k)) {
+    if q.key.as_deref().is_some_and(|k| !data_key(k)) {
         return err(StatusCode::BAD_REQUEST, "key is a Secret data key");
     }
     let got = if app.demo {
@@ -789,20 +776,53 @@ async fn kubernetes_secret(
         };
         crate::cluster::open_secret(&client, &q.ns, &q.name, q.key.as_deref()).await
     };
-    match got {
-        Ok(v) => no_store(v),
-        Err(r) => {
-            let mut resp = err(
-                StatusCode::from_u16(r.code).unwrap_or(StatusCode::BAD_GATEWAY),
-                r.message,
-            );
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store, private"),
-            );
-            resp
-        }
+    got.map_or_else(refusal, no_store)
+}
+
+/// A refusal as JSON, kept by no cache.
+fn refusal(r: crate::cluster::Refusal) -> Response {
+    let mut resp = err(
+        StatusCode::from_u16(r.code).unwrap_or(StatusCode::BAD_GATEWAY),
+        r.message,
+    );
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
+    );
+    resp
+}
+
+#[derive(Deserialize)]
+struct ConfigMapQuery {
+    ns: String,
+    name: String,
+    key: String,
+}
+
+/// `/api/kubernetes/configmap?ns=&name=&key=`: a post-it peeled off its board, one key's value.
+/// The board already lists each key and its size (the watch); a value is read only when asked
+/// for, with the viewer's own credentials, and not cached.
+async fn kubernetes_configmap(
+    State(app): State<Shared>,
+    user: Option<Extension<Arc<User>>>,
+    Query(q): Query<ConfigMapQuery>,
+) -> Response {
+    if !kube_name(&q.ns) || !kube_name(&q.name) {
+        return err(StatusCode::BAD_REQUEST, "ns and name are Kubernetes names");
     }
+    if !data_key(&q.key) {
+        return err(StatusCode::BAD_REQUEST, "key is a ConfigMap data key");
+    }
+    let got = if app.demo {
+        crate::cluster::demo_configmap(&q.ns, &q.name, &q.key)
+    } else {
+        let client = match kube_for(&app, user.as_ref().map(|u| &*u.0)).await {
+            Ok(c) => c,
+            Err(e) => return err(StatusCode::BAD_GATEWAY, e),
+        };
+        crate::cluster::open_configmap(&client, &q.ns, &q.name, &q.key).await
+    };
+    got.map_or_else(refusal, no_store)
 }
 
 /// A picture's stream: the whole of it, then each change; a viewer that falls behind gets the
@@ -1542,10 +1562,10 @@ mod tests {
     #[test]
     fn only_a_data_key_reaches_a_secret_read() {
         for ok in ["tls.crt", ".dockerconfigjson", "DB_PASSWORD", "a-b_c.d"] {
-            assert!(secret_key(ok), "{ok:?}");
+            assert!(data_key(ok), "{ok:?}");
         }
         for bad in ["", "a/b", "a b", "x?y", "%2e", &"a".repeat(254)] {
-            assert!(!secret_key(bad), "{bad:?}");
+            assert!(!data_key(bad), "{bad:?}");
         }
     }
 
@@ -1618,7 +1638,6 @@ mod tests {
 
     #[test]
     fn the_two_pages_differ_and_share_the_cli_previews() {
-        assert_ne!(page(View::Classic), page(View::AgentSandbox));
         assert_ne!(page(View::AgentSandbox), page(View::Admin));
         assert_ne!(page(View::Admin), page(View::Kubernetes));
         for view in View::ALL {
@@ -1651,28 +1670,34 @@ mod tests {
         let none = HeaderMap::new();
         let picked = headers("recess=k; recess-view=admin");
         let picked_before = headers("recess=k; recess-theme=wired-3d");
-        assert_eq!(pick(View::Classic, None, &none), View::Classic);
-        assert_eq!(pick(View::Classic, None, &picked), View::Admin);
+        assert_eq!(pick(View::Kubernetes, None, &none), View::Kubernetes);
+        assert_eq!(pick(View::Kubernetes, None, &picked), View::Admin);
         assert_eq!(
-            pick(View::Classic, None, &picked_before),
+            pick(View::Kubernetes, None, &picked_before),
             View::AgentSandbox,
             "the old cookie, and the old name in it, are still read"
         );
         assert_eq!(
-            pick(View::Classic, Some("watch"), &none),
+            pick(View::Kubernetes, Some("watch"), &none),
             View::Admin,
             "the old name in a link"
         );
         assert_eq!(
-            pick(View::AgentSandbox, Some("classic"), &picked),
-            View::Classic
+            pick(View::Admin, Some("classic"), &picked),
+            View::AgentSandbox,
+            "the page that is gone, in a link, opens the run's 3D view"
+        );
+        assert_eq!(
+            pick(View::Admin, None, &headers("recess=k; recess-view=classic")),
+            View::AgentSandbox,
+            "and so does its name in the cookie"
         );
         assert_eq!(
             pick(View::AgentSandbox, Some("bogus"), &none),
             View::AgentSandbox
         );
         assert_eq!(
-            pick(View::Classic, Some("kubernetes"), &none),
+            pick(View::AgentSandbox, Some("kubernetes"), &none),
             View::Kubernetes
         );
     }

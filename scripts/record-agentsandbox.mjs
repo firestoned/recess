@@ -4,7 +4,7 @@
 // Record the AgentSandbox demo for the README: Chrome's screencast frames with their timestamps,
 // driven like a person would (type the issuer, sign in, fill sheet 02 and send, drill into the gateway and the
 // vault while it runs, follow it to the exit, then tour the layers and orbit). Writes the PNG
-// frames and an ffmpeg concat list (frames.txt) into OUT_DIR; scripts/record-agentsandbox.sh encodes.
+// frames and an ffmpeg concat list (frames.txt) into OUT_DIR; scripts/record.sh encodes.
 //
 // usage: node scripts/record-agentsandbox.mjs URL OUT_DIR [WIDTH HEIGHT]
 // CHROME names the browser binary (Chrome or Chromium); the macOS path by default.

@@ -15,6 +15,10 @@
 //! a time ([`open_secret`]): its keys and sizes, then a value only when one is asked for, each a
 //! read made with their own credentials, so their RBAC decides; nothing of it is kept here.
 //!
+//! ConfigMaps are the post-its on each namespace's pin board. They are watched whole, but the
+//! page gets only their metadata and each key's name and size ([`configmap_keyed`]): a value is
+//! read when the person asks for it ([`open_configmap`]), as a Secret's is.
+//!
 //! The picture is kept in an [`admin::Fleet`](crate::admin::Fleet), the store the Admin view
 //! uses: the whole of it, then each change, over one server-sent event stream.
 
@@ -23,14 +27,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::TryStreamExt as _;
 use kube::api::{ApiResource, DynamicObject, GroupVersionKind};
 use kube::discovery::{Discovery, Scope, verbs};
-use kube::runtime::{WatchStreamExt as _, watcher};
+use kube::runtime::watcher;
 use serde_json::{Value, json};
 use tokio::task::{AbortHandle, JoinSet};
 
-use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use kube::core::PartialObjectMeta;
 
 use crate::admin::Fleet;
@@ -96,7 +100,22 @@ async fn run(fleet: Arc<Fleet>, client: kube::Client) {
         let api = kube::Api::all_with(client.clone(), &ar);
         tasks.spawn(watch(fleet.clone(), api, ar, kind.to_owned()));
     }
-    tasks.spawn(watch_secrets(fleet.clone(), kube::Api::all(client.clone())));
+    tasks.spawn(watch_as::<SecretMeta>(
+        fleet.clone(),
+        kube::Api::all(client.clone()),
+        "secret",
+        "secrets",
+        secret_keyed,
+    ));
+    tasks.spawn(watch_as::<ConfigMap>(
+        fleet.clone(),
+        kube::Api::all(client.clone()),
+        "configmap",
+        "configmaps",
+        configmap_keyed,
+    ));
+    // The admission policies beside the API: their bindings, hits and the cupboard.
+    tasks.spawn(crate::vap::run(fleet.clone(), client.clone()));
     let mut running: HashMap<String, AbortHandle> = HashMap::new();
     loop {
         // Watches that ended (refused, or their kind gone) leave the map, so the next round
@@ -198,22 +217,31 @@ fn keyed(kind: &str, ar: &ApiResource, obj: &DynamicObject) -> (String, Value) {
     (key, v)
 }
 
-/// Whether the API server refused the person (401 or 403): no retry until the next discovery.
-fn refused(e: &watcher::Error) -> bool {
-    let code = match e {
+/// The API server's answer to a failed list or watch: its HTTP code, or 0.
+fn code(e: &watcher::Error) -> u16 {
+    match e {
         watcher::Error::InitialListFailed(kube::Error::Api(s))
         | watcher::Error::WatchStartFailed(kube::Error::Api(s))
         | watcher::Error::WatchFailed(kube::Error::Api(s))
         | watcher::Error::WatchError(s) => s.code,
         _ => 0,
-    };
-    code == 401 || code == 403
+    }
 }
 
-async fn watch(fleet: Arc<Fleet>, api: kube::Api<DynamicObject>, ar: ApiResource, kind: String) {
-    let mut stream = watcher(api, watcher::Config::default())
-        .default_backoff()
-        .boxed();
+/// Whether the API server refused the person (401 or 403): no retry until the next discovery.
+fn refused(e: &watcher::Error) -> bool {
+    matches!(code(e), 401 | 403)
+}
+
+/// One kind, every object of it (across all namespaces when it is namespaced), kept in the
+/// fleet under `kind`. A refusal, or a kind the API server does not serve, is noted and ends it.
+pub(crate) async fn watch(
+    fleet: Arc<Fleet>,
+    api: kube::Api<DynamicObject>,
+    ar: ApiResource,
+    kind: String,
+) {
+    let mut stream = crate::util::relisting(api, watcher::Config::default());
     let mut fresh: Option<BTreeMap<String, Value>> = None;
     loop {
         match stream.try_next().await {
@@ -250,6 +278,13 @@ async fn watch(fleet: Arc<Fleet>, api: kube::Api<DynamicObject>, ar: ApiResource
                 );
                 return;
             }
+            Err(e) if code(&e) == 404 => {
+                fleet.note(
+                    &kind,
+                    &format!("{} not served by this API server", ar.plural),
+                );
+                return;
+            }
             // The backoff retries; the page says why until it works.
             Err(e) => fleet.note(&kind, &e.to_string()),
         }
@@ -263,16 +298,7 @@ type SecretMeta = PartialObjectMeta<Secret>;
 /// A Secret as the page gets it: its metadata, without its managed fields and last-applied copy
 /// (which, for a Secret applied with kubectl, holds its data).
 fn secret_keyed(m: &SecretMeta) -> (String, Value) {
-    let mut v = json!({"metadata": serde_json::to_value(&m.metadata).unwrap_or_default()});
-    if let Some(md) = v.pointer_mut("/metadata").and_then(Value::as_object_mut) {
-        md.remove("managedFields");
-    }
-    if let Some(a) = v
-        .pointer_mut("/metadata/annotations")
-        .and_then(Value::as_object_mut)
-    {
-        a.remove("kubectl.kubernetes.io/last-applied-configuration");
-    }
+    let mut v = json!({"metadata": bare_meta(&m.metadata)});
     v["kind"] = json!("Secret");
     v["apiVersion"] = json!("v1");
     let key = format!(
@@ -283,47 +309,69 @@ fn secret_keyed(m: &SecretMeta) -> (String, Value) {
     (key, v)
 }
 
-/// Every Secret's metadata, across all namespaces. An Api of metadata asks for metadata only:
-/// no Secret's data crosses the wire here.
-async fn watch_secrets(fleet: Arc<Fleet>, api: kube::Api<SecretMeta>) {
-    const KIND: &str = "secret";
-    let mut stream = watcher(api, watcher::Config::default())
-        .default_backoff()
-        .boxed();
+/// An object's metadata as the page gets it: without its managed fields, and without its
+/// last-applied copy (which, for an object applied with kubectl, holds its data).
+fn bare_meta(m: &kube::api::ObjectMeta) -> Value {
+    let mut v = serde_json::to_value(m).unwrap_or_default();
+    if let Some(md) = v.as_object_mut() {
+        md.remove("managedFields");
+    }
+    if let Some(a) = v.pointer_mut("/annotations").and_then(Value::as_object_mut) {
+        a.remove("kubectl.kubernetes.io/last-applied-configuration");
+    }
+    v
+}
+
+/// Every object of one built-in kind, across all namespaces, as `keyed` gives it to the page:
+/// the Secrets (an Api of metadata asks for metadata only, so no Secret's data crosses the wire)
+/// and the ConfigMaps (whole, but `keyed` keeps no value).
+async fn watch_as<K>(
+    fleet: Arc<Fleet>,
+    api: kube::Api<K>,
+    kind: &'static str,
+    plural: &'static str,
+    keyed: fn(&K) -> (String, Value),
+) where
+    K: kube::Resource + Clone + serde::de::DeserializeOwned + std::fmt::Debug + Send + 'static,
+{
+    let mut stream = crate::util::relisting(api, watcher::Config::default());
     let mut fresh: Option<BTreeMap<String, Value>> = None;
     loop {
         match stream.try_next().await {
             Ok(Some(ev)) => {
-                fleet.note(KIND, "");
+                fleet.note(kind, "");
                 match ev {
                     watcher::Event::Init => fresh = Some(BTreeMap::new()),
-                    watcher::Event::InitApply(m) => {
+                    watcher::Event::InitApply(o) => {
                         if let Some(f) = fresh.as_mut() {
-                            let (k, v) = secret_keyed(&m);
+                            let (k, v) = keyed(&o);
                             f.insert(k, v);
                         }
                     }
                     watcher::Event::InitDone => {
                         if let Some(f) = fresh.take() {
-                            fleet.reset(KIND, f);
+                            fleet.reset(kind, f);
                         }
                     }
-                    watcher::Event::Apply(m) => {
-                        let (k, v) = secret_keyed(&m);
-                        fleet.put(KIND, k, v);
+                    watcher::Event::Apply(o) => {
+                        let (k, v) = keyed(&o);
+                        fleet.put(kind, k, v);
                     }
-                    watcher::Event::Delete(m) => fleet.del(&secret_keyed(&m).0),
+                    watcher::Event::Delete(o) => fleet.del(&keyed(&o).0),
                 }
             }
             Ok(None) => {
-                fleet.note(KIND, "the watch ended");
+                fleet.note(kind, "the watch ended");
                 return;
             }
             Err(e) if refused(&e) => {
-                fleet.note(KIND, "not allowed to list secrets in all namespaces");
+                fleet.note(
+                    kind,
+                    &format!("not allowed to list {plural} in all namespaces"),
+                );
                 return;
             }
-            Err(e) => fleet.note(KIND, &e.to_string()),
+            Err(e) => fleet.note(kind, &e.to_string()),
         }
     }
 }
@@ -412,6 +460,74 @@ pub async fn open_secret(
     let api: kube::Api<Secret> = kube::Api::namespaced(client.clone(), ns);
     match api.get(name).await {
         Ok(sec) => drawer(&sec, key),
+        Err(kube::Error::Api(s)) => Err(Refusal {
+            code: s.code,
+            message: s.message,
+        }),
+        Err(e) => Err(Refusal {
+            code: 502,
+            message: e.to_string(),
+        }),
+    }
+}
+
+// ------------------------------------------------------------------------------ the pin boards
+
+/// A ConfigMap as the page gets it: a post-it. Its metadata, whether it is immutable, and each
+/// key with its size (`data` as text, `binaryData` as binary), never a value.
+fn configmap_keyed(cm: &ConfigMap) -> (String, Value) {
+    let mut keys: Vec<Value> = Vec::new();
+    for (k, v) in cm.data.iter().flatten() {
+        keys.push(json!({"name": k, "bytes": v.len(), "text": true}));
+    }
+    for (k, v) in cm.binary_data.iter().flatten() {
+        keys.push(json!({"name": k, "bytes": v.0.len(), "text": false}));
+    }
+    keys.sort_by(|a, b| str_at(a, "/name").cmp(str_at(b, "/name")));
+    let v = json!({
+        "apiVersion": "v1", "kind": "ConfigMap",
+        "metadata": bare_meta(&cm.metadata),
+        "immutable": cm.immutable.unwrap_or(false),
+        "keys": keys,
+    });
+    let key = format!(
+        "configmap/{}/{}",
+        str_at(&v, "/metadata/namespace"),
+        str_at(&v, "/metadata/name")
+    );
+    (key, v)
+}
+
+/// One key's value of a ConfigMap: from `data` (text), else `binaryData` (shown as base64).
+fn note_value(cm: &ConfigMap, key: &str) -> Result<Value, Refusal> {
+    let mut out = if let Some(t) = cm.data.as_ref().and_then(|d| d.get(key)) {
+        shown(t.as_bytes())
+    } else if let Some(b) = cm.binary_data.as_ref().and_then(|d| d.get(key)) {
+        shown(&b.0)
+    } else {
+        return Err(Refusal {
+            code: 404,
+            message: format!("no key {key:?} in this ConfigMap"),
+        });
+    };
+    out["key"] = json!(key);
+    Ok(out)
+}
+
+/// Peel a post-it off the board: read one ConfigMap with this client (the person's own
+/// credentials) and return one key's value. Nothing is kept.
+///
+/// # Errors
+/// The API server refused or could not find it, or could not be reached; or it has no such key.
+pub async fn open_configmap(
+    client: &kube::Client,
+    ns: &str,
+    name: &str,
+    key: &str,
+) -> Result<Value, Refusal> {
+    let api: kube::Api<ConfigMap> = kube::Api::namespaced(client.clone(), ns);
+    match api.get(name).await {
+        Ok(cm) => note_value(&cm, key),
         Err(kube::Error::Api(s)) => Err(Refusal {
             code: s.code,
             message: s.message,
@@ -572,6 +688,309 @@ pub fn demo_secret(ns: &str, name: &str, key: Option<&str>) -> Result<Value, Ref
     drawer(&sec, key)
 }
 
+/// One of the demo's ConfigMaps: where, its keys and values, and who made it.
+struct DemoNote {
+    ns: &'static str,
+    name: &'static str,
+    kv: &'static [(&'static str, &'static str)],
+    immutable: bool,
+    /// Installed by a Helm release (its labels say so).
+    helm: bool,
+    /// Owned by an operator's object: its kind and name.
+    owner: Option<(&'static str, &'static str)>,
+}
+
+const fn note(
+    ns: &'static str,
+    name: &'static str,
+    kv: &'static [(&'static str, &'static str)],
+) -> DemoNote {
+    DemoNote {
+        ns,
+        name,
+        kv,
+        immutable: false,
+        helm: false,
+        owner: None,
+    }
+}
+
+/// The demo's ConfigMaps, less each namespace's `kube-root-ca.crt` (added for all of them).
+const DEMO_NOTES: &[DemoNote] = &[
+    note(
+        "kube-system",
+        "coredns",
+        &[(
+            "Corefile",
+            ".:53 {\n    errors\n    health\n    kubernetes cluster.local in-addr.arpa ip6.arpa\n    forward . /etc/resolv.conf\n    cache 30\n}\n",
+        )],
+    ),
+    note(
+        "kube-system",
+        "kube-proxy",
+        &[
+            (
+                "config.conf",
+                "apiVersion: kubeproxy.config.k8s.io/v1alpha1\nkind: KubeProxyConfiguration\nmode: iptables\n",
+            ),
+            (
+                "kubeconfig.conf",
+                "apiVersion: v1\nkind: Config\nclusters: []\n",
+            ),
+        ],
+    ),
+    note(
+        "kube-system",
+        "extension-apiserver-authentication",
+        &[
+            ("client-ca-file", "(demo placeholder)"),
+            ("requestheader-allowed-names", "[\"front-proxy-client\"]"),
+        ],
+    ),
+    DemoNote {
+        helm: true,
+        ..note(
+            "mediatore-system",
+            "broker-config",
+            &[(
+                "broker.yaml",
+                "listen: :8443\nnamespace: mediatore-system\nbundle:\n  maxAge: 15m\n",
+            )],
+        )
+    },
+    DemoNote {
+        helm: true,
+        ..note(
+            "mediatore-system",
+            "fluent-bit-config",
+            &[
+                (
+                    "fluent-bit.conf",
+                    "[INPUT]\n    Name tail\n    Path /var/log/broker/*.log\n[OUTPUT]\n    Name stdout\n",
+                ),
+                ("parsers.conf", "[PARSER]\n    Name json\n    Format json\n"),
+            ],
+        )
+    },
+    DemoNote {
+        owner: Some(("Banlieue", "banlieue")),
+        ..note(
+            "banlieue-system",
+            "banlieue-manager-config",
+            &[(
+                "controller.yaml",
+                "leaderElection: true\nproviders:\n  - slate-kvm\n",
+            )],
+        )
+    },
+    DemoNote {
+        helm: true,
+        ..note(
+            "cert-manager",
+            "cert-manager-webhook",
+            &[(
+                "config.yaml",
+                "apiVersion: webhook.config.cert-manager.io/v1alpha1\nkind: WebhookConfiguration\n",
+            )],
+        )
+    },
+    note(
+        "team-a",
+        "api-config",
+        &[
+            ("LOG_LEVEL", "info"),
+            ("DB_HOST", "postgres.team-a.svc"),
+            ("FEATURE_SEARCH", "on"),
+        ],
+    ),
+    note(
+        "team-a",
+        "envoy-config",
+        &[(
+            "envoy.yaml",
+            "static_resources:\n  listeners:\n    - name: ingress\n      address: {socket_address: {address: 0.0.0.0, port_value: 8443}}\n",
+        )],
+    ),
+    DemoNote {
+        helm: true,
+        ..note(
+            "team-a",
+            "otel-collector",
+            &[(
+                "relay.yaml",
+                "receivers: {otlp: {protocols: {grpc: {}}}}\nexporters: {debug: {}}\n",
+            )],
+        )
+    },
+    note(
+        "team-a",
+        "worker-settings",
+        &[("concurrency", "8"), ("queue", "jobs")],
+    ),
+    note(
+        "team-a",
+        "legacy-feature-flags",
+        &[("NEW_CHECKOUT", "false")],
+    ),
+    note(
+        "team-b",
+        "web-nginx",
+        &[(
+            "default.conf",
+            "server {\n    listen 8080;\n    root /usr/share/nginx/html;\n}\n",
+        )],
+    ),
+    DemoNote {
+        immutable: true,
+        ..note(
+            "team-b",
+            "web-release-0.9.2",
+            &[("VERSION", "0.9.2"), ("CHANNEL", "stable")],
+        )
+    },
+    DemoNote {
+        immutable: true,
+        ..note(
+            "team-b",
+            "web-release-0.9.1",
+            &[("VERSION", "0.9.1"), ("CHANNEL", "stable")],
+        )
+    },
+];
+
+/// How the demo's pods use those: the pod (by name prefix), the container, how, the ConfigMap,
+/// and the key for an env reference.
+const DEMO_USES: &[(&str, &str, &str, &str, &str)] = &[
+    ("coredns-", "coredns", "volume", "coredns", ""),
+    ("kube-proxy-", "kube-proxy", "volume", "kube-proxy", ""),
+    ("broker-", "broker", "volume", "broker-config", ""),
+    ("broker-", "log-shipper", "volume", "fluent-bit-config", ""),
+    (
+        "banlieue-controller-",
+        "manager",
+        "volume",
+        "banlieue-manager-config",
+        "",
+    ),
+    (
+        "cert-manager-webhook-",
+        "cert-manager-webhook",
+        "volume",
+        "cert-manager-webhook",
+        "",
+    ),
+    ("api-", "app", "envFrom", "api-config", ""),
+    ("api-", "envoy", "volume", "envoy-config", ""),
+    ("api-", "otel", "volume", "otel-collector", ""),
+    ("worker-", "app", "env", "worker-settings", "concurrency"),
+    ("worker-", "app", "env", "worker-settings", "queue"),
+    ("web-", "app", "volume", "web-nginx", ""),
+    ("web-1", "app", "envFrom", "web-release-0.9.2", ""),
+    ("web-0", "app", "envFrom", "web-release-0.9.2", ""),
+];
+
+/// The demo's ConfigMaps as the API server would return them.
+fn demo_configmaps() -> Vec<ConfigMap> {
+    let mut out: Vec<ConfigMap> = DEMO_NOTES
+        .iter()
+        .map(|n| {
+            let mut v = json!({
+                "metadata": {"name": n.name, "namespace": n.ns, "uid": format!("demo-{}-{}", n.ns, n.name),
+                             "creationTimestamp": "2026-11-21T10:00:00Z"},
+                "data": n.kv.iter().map(|(k, v)| ((*k).to_owned(), json!(v))).collect::<serde_json::Map<_, _>>(),
+            });
+            if n.immutable {
+                v["immutable"] = json!(true);
+            }
+            if n.helm {
+                v["metadata"]["labels"] = json!({"app.kubernetes.io/managed-by": "Helm"});
+                v["metadata"]["annotations"] = json!({"meta.helm.sh/release-name": n.ns.trim_end_matches("-system")});
+            }
+            if let Some((kind, name)) = n.owner {
+                v["metadata"]["ownerReferences"] = json!([{"apiVersion": "banlieue.io/v1alpha1", "kind": kind,
+                    "name": name, "uid": format!("demo-owner-{name}"), "controller": true}]);
+            }
+            serde_json::from_value(v).unwrap_or_default()
+        })
+        .collect();
+    for ns in DEMO_NAMESPACES {
+        out.push(
+            serde_json::from_value(json!({
+                "metadata": {"name": "kube-root-ca.crt", "namespace": ns, "uid": format!("demo-{ns}-kube-root-ca"),
+                             "creationTimestamp": "2026-11-20T09:00:00Z"},
+                "data": {"ca.crt": "-----BEGIN CERTIFICATE-----\n(demo placeholder)\n-----END CERTIFICATE-----\n"},
+            }))
+            .unwrap_or_default(),
+        );
+    }
+    out
+}
+
+/// A post-it's value in the demo, as [`open_configmap`] answers for a cluster.
+///
+/// # Errors
+/// An unknown ConfigMap or key (not found).
+pub fn demo_configmap(ns: &str, name: &str, key: &str) -> Result<Value, Refusal> {
+    let cm = demo_configmaps()
+        .into_iter()
+        .find(|c| {
+            c.metadata.namespace.as_deref() == Some(ns) && c.metadata.name.as_deref() == Some(name)
+        })
+        .ok_or_else(|| Refusal {
+            code: 404,
+            message: format!("configmaps \"{name}\" not found"),
+        })?;
+    note_value(&cm, key)
+}
+
+/// A demo pod's use of the ConfigMaps: the service account's projected `kube-root-ca.crt`, as
+/// every pod has, and what [`DEMO_USES`] gives it.
+fn demo_use(pod: &mut Value, name: &str) {
+    let mut vols = vec![json!({"name": "kube-api-access", "projected": {"sources": [
+        {"serviceAccountToken": {"path": "token"}},
+        {"configMap": {"name": "kube-root-ca.crt", "items": [{"key": "ca.crt", "path": "ca.crt"}]}}]}})];
+    for (prefix, ctr, how, cm, key) in DEMO_USES {
+        if !name.starts_with(prefix) {
+            continue;
+        }
+        let Some(c) = pod
+            .pointer_mut("/spec/containers")
+            .and_then(Value::as_array_mut)
+            .and_then(|cs| cs.iter_mut().find(|c| c["name"] == *ctr))
+        else {
+            continue;
+        };
+        let push = |c: &mut Value, field: &str, item: Value| {
+            if !c[field].is_array() {
+                c[field] = json!([]);
+            }
+            if let Some(a) = c[field].as_array_mut() {
+                a.push(item);
+            }
+        };
+        match *how {
+            "volume" => {
+                push(
+                    c,
+                    "volumeMounts",
+                    json!({"name": cm, "mountPath": format!("/etc/{cm}"), "readOnly": true}),
+                );
+                if !vols.iter().any(|v| v["name"] == *cm) {
+                    vols.push(json!({"name": cm, "configMap": {"name": cm}}));
+                }
+            }
+            "envFrom" => push(c, "envFrom", json!({"configMapRef": {"name": cm}})),
+            _ => push(
+                c,
+                "env",
+                json!({"name": key.to_uppercase(),
+                                       "valueFrom": {"configMapKeyRef": {"name": cm, "key": key}}}),
+            ),
+        }
+    }
+    pod["spec"]["volumes"] = json!(vols);
+}
+
 /// A container for the demo: name, image, and its state as the kubelet reports it.
 struct DemoCtr {
     name: &'static str,
@@ -591,7 +1010,7 @@ fn waiting(reason: &str) -> Value {
 
 fn pod_json(ns: &str, name: &str, node: &str, ip: &str, phase: &str, ctrs: &[DemoCtr]) -> Value {
     let since = "2026-11-25T08:00:00Z";
-    json!({
+    let mut pod = json!({
         "apiVersion": "v1", "kind": "Pod",
         "metadata": {"name": name, "namespace": ns, "uid": format!("demo-{ns}-{name}"),
                      "creationTimestamp": since,
@@ -612,7 +1031,9 @@ fn pod_json(ns: &str, name: &str, node: &str, ip: &str, phase: &str, ctrs: &[Dem
                 "name": c.name, "image": c.image, "ready": c.ready, "restartCount": c.restarts, "state": c.state,
             })).collect::<Vec<_>>(),
         },
-    })
+    });
+    demo_use(&mut pod, name);
+    pod
 }
 
 fn cr_json(
@@ -635,8 +1056,20 @@ fn cr_json(
     })
 }
 
+/// The demo's namespaces.
+const DEMO_NAMESPACES: &[&str] = &[
+    "default",
+    "kube-system",
+    "mediatore-system",
+    "banlieue-system",
+    "cert-manager",
+    "team-a",
+    "team-b",
+];
+
 /// The demo's cluster: a few namespaces, their pods (one restarting, one pulling its image), and
-/// custom resources from mediatore, banlieue and cert-manager. One pod cycles while it runs.
+/// custom resources from mediatore, banlieue and cert-manager, and admission policies with their
+/// hits. One pod cycles while it runs.
 pub async fn demo(fleet: Arc<Fleet>) {
     let crds = [
         ("mediatore.io", "v1beta1", "AgentSandbox", "agentsandboxes"),
@@ -661,15 +1094,7 @@ pub async fn demo(fleet: Arc<Fleet>) {
             json!({"group": g, "version": v, "kind": k, "plural": p, "watch": format!("cr:{g}/{p}")}),
         );
     }
-    for ns in [
-        "default",
-        "kube-system",
-        "mediatore-system",
-        "banlieue-system",
-        "cert-manager",
-        "team-a",
-        "team-b",
-    ] {
+    for ns in DEMO_NAMESPACES {
         fleet.put(
             "namespace",
             format!("namespace//{ns}"),
@@ -931,40 +1356,47 @@ pub async fn demo(fleet: Arc<Fleet>) {
                                 "creationTimestamp": "2026-11-21T10:00:00Z"}}),
         );
     }
-    // One pod cycles: pending, running, restarting.
-    let mut tick = 0u32;
-    loop {
-        tokio::time::sleep(Duration::from_secs(6)).await;
-        tick += 1;
-        let (phase, state, ready) = match tick % 3 {
-            0 => ("Pending", waiting("ContainerCreating"), false),
-            1 => (
-                "Running",
-                running(&jiff::Timestamp::now().to_string()),
-                true,
-            ),
-            _ => ("Running", waiting("CrashLoopBackOff"), false),
-        };
-        let ctrs = [DemoCtr {
-            name: "app",
-            image: "ghcr.io/example/batch:1.0.0",
-            state,
-            ready,
-            restarts: tick / 3,
-        }];
-        fleet.put(
-            "pod",
-            "pod/team-b/batch-28f1c".to_owned(),
-            pod_json(
-                "team-b",
-                "batch-28f1c",
-                "worker-1",
-                "10.244.1.40",
-                phase,
-                &ctrs,
-            ),
-        );
+    for cm in demo_configmaps() {
+        let (k, v) = configmap_keyed(&cm);
+        fleet.put("configmap", k, v);
     }
+    // One pod cycles (pending, running, restarting) while the admission policies are hit.
+    let cycle = async {
+        let mut tick = 0u32;
+        loop {
+            tokio::time::sleep(Duration::from_secs(6)).await;
+            tick += 1;
+            let (phase, state, ready) = match tick % 3 {
+                0 => ("Pending", waiting("ContainerCreating"), false),
+                1 => (
+                    "Running",
+                    running(&jiff::Timestamp::now().to_string()),
+                    true,
+                ),
+                _ => ("Running", waiting("CrashLoopBackOff"), false),
+            };
+            let ctrs = [DemoCtr {
+                name: "app",
+                image: "ghcr.io/example/batch:1.0.0",
+                state,
+                ready,
+                restarts: tick / 3,
+            }];
+            fleet.put(
+                "pod",
+                "pod/team-b/batch-28f1c".to_owned(),
+                pod_json(
+                    "team-b",
+                    "batch-28f1c",
+                    "worker-1",
+                    "10.244.1.40",
+                    phase,
+                    &ctrs,
+                ),
+            );
+        }
+    };
+    tokio::join!(cycle, crate::vap::demo(fleet.clone()));
 }
 
 #[cfg(test)]
@@ -1045,6 +1477,87 @@ mod tests {
         assert_eq!(k, "secret/a/s");
         assert!(!v.to_string().contains("data-marker"));
         assert_eq!(v.pointer("/metadata/annotations/keep"), Some(&json!("1")));
+    }
+
+    #[test]
+    fn a_post_it_carries_its_keys_and_sizes_but_no_value() {
+        let cm: ConfigMap = serde_json::from_value(json!({
+            "metadata": {"name": "app", "namespace": "a", "managedFields": [{}], "annotations": {
+                "kubectl.kubernetes.io/last-applied-configuration": "{\"data\":{\"k\":\"value-marker\"}}"}},
+            "data": {"k": "value-marker"},
+            "binaryData": {"blob": "/wA="},
+            "immutable": true,
+        }))
+        .unwrap();
+        let (k, v) = configmap_keyed(&cm);
+        assert_eq!(k, "configmap/a/app");
+        assert!(!v.to_string().contains("value-marker"), "no value: {v}");
+        assert!(v.pointer("/metadata/managedFields").is_none());
+        assert_eq!(v["immutable"], true);
+        assert_eq!(
+            v["keys"],
+            json!([{"name": "blob", "bytes": 2, "text": false},
+                   {"name": "k", "bytes": 12, "text": true}])
+        );
+        assert_eq!(note_value(&cm, "k").ok().unwrap()["value"], "value-marker");
+        assert_eq!(note_value(&cm, "blob").ok().unwrap()["value"], "/wA=");
+        assert_eq!(note_value(&cm, "nope").err().unwrap().code, 404);
+    }
+
+    #[test]
+    fn the_demo_pins_its_post_its_and_ties_them_to_pods() {
+        let cms = demo_configmaps();
+        // Every namespace has its kube-root-ca.crt; default has nothing else, so no board.
+        assert_eq!(
+            cms.iter()
+                .filter(|c| c.metadata.name.as_deref() == Some("kube-root-ca.crt"))
+                .count(),
+            DEMO_NAMESPACES.len()
+        );
+        assert!(
+            !cms.iter()
+                .any(|c| c.metadata.namespace.as_deref() == Some("default")
+                    && c.metadata.name.as_deref() != Some("kube-root-ca.crt"))
+        );
+        // Each use names a ConfigMap that exists, in the namespace of a pod it matches.
+        for (_, _, _, cm, _) in DEMO_USES {
+            assert!(
+                cms.iter().any(|c| c.metadata.name.as_deref() == Some(cm)),
+                "{cm}"
+            );
+        }
+        let pod = pod_json(
+            "team-a",
+            "worker-7b5d9c8f6-lw4hz",
+            "n",
+            "ip",
+            "Running",
+            &[DemoCtr {
+                name: "app",
+                image: "i",
+                state: running("t"),
+                ready: true,
+                restarts: 0,
+            }],
+        );
+        assert_eq!(
+            pod.pointer("/spec/containers/0/env/0/valueFrom/configMapKeyRef/name"),
+            Some(&json!("worker-settings"))
+        );
+        assert_eq!(
+            pod.pointer("/spec/volumes/0/projected/sources/1/configMap/name"),
+            Some(&json!("kube-root-ca.crt"))
+        );
+        assert_eq!(
+            demo_configmap("team-a", "api-config", "LOG_LEVEL")
+                .ok()
+                .unwrap()["value"],
+            "info"
+        );
+        assert_eq!(
+            demo_configmap("team-a", "nope", "x").err().unwrap().code,
+            404
+        );
     }
 
     #[test]

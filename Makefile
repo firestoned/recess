@@ -51,8 +51,8 @@ dist: build ## The release binary into dist/recess-<os>-<arch>, with its SHA-256
 demo: ## The scripted run in a browser, no cluster
 	cargo run --release -- web --demo
 
-record: ## Record the AgentSandbox demo into docs/media (GIF and MP4): needs node, ffmpeg, Chrome
-	scripts/record-agentsandbox.sh
+record: ## Record each view's demo into docs/media (GIF and MP4; VIEWS=kubernetes for one): needs node, ffmpeg, Chrome
+	scripts/record.sh $(VIEWS)
 
 docs: ## Build the documentation site into docs/site (MkDocs, strict): needs poetry
 	cd docs && poetry install --no-interaction --quiet && poetry run mkdocs build

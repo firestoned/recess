@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Erick Bourgeois, Recess
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared by the classic page and the 3D one: the command each form is equivalent to, as the
-// mediatore CLI spells it. The server sends the one it actually ran; these are the previews.
+// Shared by the 3D pages: the command each form is equivalent to, as the mediatore CLI
+// spells it. The server sends the one it actually ran; these are the previews.
 function sh(w) {
   return w !== '' && /^[A-Za-z0-9\-_./:=@,+%]+$/.test(w) ? w : `'${String(w).replace(/'/g, "'\\''")}'`;
 }

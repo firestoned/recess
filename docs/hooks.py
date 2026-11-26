@@ -37,6 +37,8 @@ SECTIONS = {
     "arranging-the-theatre": "layout.md",
     "recording-it": "agentsandbox.md",
     "the-admin-view": "admin.md",
+    "the-agentsandbox-admin-view": "admin.md",
+    "the-kubernetes-view": "kubernetes.md",
     "the-tui": "tui.md",
     "config-file": "configuration.md",
     "kubernetes-access": "configuration.md",

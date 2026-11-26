@@ -5,12 +5,12 @@
 
 Both 3D views stand on one theatre: the infrastructure every claim passes through, each piece a
 **station** at a fixed place on a wireframe floor. AgentSandbox adds one run's journey to it
-(your sheets, the sandbox VM, the exit); Admin adds every live agent, the gateways, the
+(your sheets, the sandbox VM, the exit); AgentSandbox Admin adds every live agent, the gateways, the
 policies, the pools and the providers. Learn the floor once and both views read the same way.
 
 ## The floor, from above
 
-![The theatre seen from above. Left, Admin: the OIDC issuer far west; the broker, the SandboxPolicy, the Kubernetes API and its Secrets together east of it; OpenBao and SPIRE south of the API. Right, AgentSandbox: the same stations, with your sheets next to the issuer, the sandbox VM far east and the exit north of it.](media/layout-map.svg){ .shot }
+![The theatre seen from above. Left, AgentSandbox Admin: the OIDC issuer far west; the broker, the SandboxPolicy, the Kubernetes API and its Secrets together east of it; OpenBao and SPIRE south of the API. Right, AgentSandbox: the same stations, with your sheets next to the issuer, the sandbox VM far east and the exit north of it.](media/layout-map.svg){ .shot }
 
 Drawn by `scripts/docs-map.mjs` from the coordinates the views use (`assets/theatre.js`, and the
 run's places in `assets/agentsandbox.js`): north is up, `x` runs east and `z` south. These are
@@ -33,7 +33,7 @@ the places Recess stands things by default; [you can move them](#arranging-the-t
 | **Gateways** | pink | The egress gateways: every tunnel out goes through one, which checks it against the claim | traffic leaves; the one in use is solid |
 | **Exit** | green | Where the run ends, with its exit code | AgentSandbox: the workload exits |
 
-Admin adds, around the same stations: a **plot** per namespace with a cage per agent, the
+AgentSandbox Admin adds, around the same stations: a **plot** per namespace with a cage per agent, the
 **gateways** in one column inside a cyan circle with the **audiences** east of them, the
 **policies** in a row north-west of the gateways, each under its ExposureCeiling, a **rack** per VM pool, and the **providers**
 (the hosts the VMs run on) south of the racks.
@@ -53,9 +53,9 @@ Admin adds, around the same stations: a **plot** per namespace with a cage per a
     API to the VM, the gateway that carried its tunnels, SPIRE that attested it and the Secrets
     sealed for it.
 
-=== "Admin"
+=== "AgentSandbox Admin"
 
-    ![The Admin view of the demo's fleet](media/admin.png){ .shot }
+    ![The AgentSandbox Admin view of the demo's fleet](media/admin.png){ .shot }
 
     Every live agent: the base stations west, the namespaces' plots east of the API, the
     gateways, audiences and policies north, the pools' racks and the providers south.

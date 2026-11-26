@@ -166,8 +166,10 @@ body {
   font-family: var(--r-mono); font-size: 0.6rem; letter-spacing: 0.12em; text-transform: uppercase;
 }
 
-/* Screenshots and the map: framed like a panel of the app. */
-.md-typeset img.shot {
+/* Screenshots and the map: framed like a panel of the app. The demo recordings the README's
+   sections bring in are framed alike, as the README cannot carry the class. */
+.md-typeset img.shot,
+.md-typeset img[src*="media/"][src$=".gif"] {
   display: block;
   width: 100%;
   border: 1px solid var(--r-faint);

@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use futures::{StreamExt as _, TryStreamExt as _};
 use kube::api::{ApiResource, DynamicObject, GroupVersionKind};
-use kube::runtime::{WatchStreamExt as _, watcher};
+use kube::runtime::watcher;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
@@ -235,6 +235,22 @@ impl Fleet {
         self.send(&json!({"op": "note", "kind": kind, "text": text}));
     }
 
+    /// Whether anyone has the page open: a read that costs (the API server's `/metrics`) waits
+    /// until someone does.
+    pub fn watched(&self) -> bool {
+        self.tx.receiver_count() > 0
+    }
+
+    /// Whether anything of `kind` is held.
+    pub fn holds(&self, kind: &str) -> bool {
+        let prefix = format!("{kind}/");
+        lock(&self.inner)
+            .items
+            .range(prefix.clone()..)
+            .next()
+            .is_some_and(|(k, (kd, _))| k.starts_with(&prefix) && kd == kind)
+    }
+
     /// The whole picture as one message, and the changes after it.
     pub fn subscribe(&self) -> (String, broadcast::Receiver<Arc<str>>) {
         let g = lock(&self.inner);
@@ -321,9 +337,7 @@ fn not_installed(e: &watcher::Error) -> bool {
 }
 
 async fn watch_kind(fleet: Arc<Fleet>, api: kube::Api<DynamicObject>, kind: &'static str) {
-    let mut stream = watcher(api, watcher::Config::default())
-        .default_backoff()
-        .boxed();
+    let mut stream = crate::util::relisting(api, watcher::Config::default());
     let mut fresh: Option<BTreeMap<String, Value>> = None;
     loop {
         match stream.try_next().await {
@@ -397,7 +411,7 @@ async fn watch_envelopes(
 ) {
     let cfg = watcher::Config::default().labels(selector);
     // An Api of metadata asks for metadata only: the Secrets' data never crosses the wire.
-    let mut stream = watcher(api, cfg).default_backoff().boxed();
+    let mut stream = crate::util::relisting(api, cfg);
     let mut fresh: Option<BTreeMap<String, Value>> = None;
     loop {
         match stream.try_next().await {
@@ -657,14 +671,13 @@ async fn open_output(
 ) -> Result<reqwest::Response, String> {
     let path = crate::engine::session_path().map_err(|e| format!("no mediatore session: {e}"))?;
     let session = mediatore_client::Session::load(&path).map_err(|_| {
-        "no mediatore session on this machine: sign in first (in the Classic or AgentSandbox view); \
+        "no mediatore session on this machine: sign in first (in the AgentSandbox view); \
          the broker shows a sandbox's output only to its owner"
             .to_owned()
     })?;
     if !session.is_fresh(30) {
         return Err(
-            "your mediatore session has expired: sign in again (in the Classic or AgentSandbox view)"
-                .into(),
+            "your mediatore session has expired: sign in again (in the AgentSandbox view)".into(),
         );
     }
     let api = crate::engine::user_api(claim).map_err(|e| format!("{e:#}"))?;
