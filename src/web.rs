@@ -301,6 +301,7 @@ pub async fn serve(
         .route("/api/kubernetes", get(kubernetes_events))
         .route("/api/kubernetes/access", get(kubernetes_access))
         .route("/api/kubernetes/secret", get(kubernetes_secret))
+        .route("/api/kubernetes/configmap", get(kubernetes_configmap))
         .route("/auth/logout", post(sign_out))
         .route_layer(middleware::from_fn_with_state(app.clone(), require_access));
     let api = ASSETS.iter().fold(api, |r, &(path, ct, body)| {
@@ -722,8 +723,8 @@ fn no_store(v: serde_json::Value) -> Response {
     r
 }
 
-/// A key in a Secret's data: what may be asked for, and nothing else.
-fn secret_key(s: &str) -> bool {
+/// A key in a Secret's or a ConfigMap's data: what may be asked for, and nothing else.
+fn data_key(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 253
         && s.bytes()
@@ -777,7 +778,7 @@ async fn kubernetes_secret(
     if !kube_name(&q.ns) || !kube_name(&q.name) {
         return err(StatusCode::BAD_REQUEST, "ns and name are Kubernetes names");
     }
-    if q.key.as_deref().is_some_and(|k| !secret_key(k)) {
+    if q.key.as_deref().is_some_and(|k| !data_key(k)) {
         return err(StatusCode::BAD_REQUEST, "key is a Secret data key");
     }
     let got = if app.demo {
@@ -789,20 +790,53 @@ async fn kubernetes_secret(
         };
         crate::cluster::open_secret(&client, &q.ns, &q.name, q.key.as_deref()).await
     };
-    match got {
-        Ok(v) => no_store(v),
-        Err(r) => {
-            let mut resp = err(
-                StatusCode::from_u16(r.code).unwrap_or(StatusCode::BAD_GATEWAY),
-                r.message,
-            );
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-store, private"),
-            );
-            resp
-        }
+    got.map_or_else(refusal, no_store)
+}
+
+/// A refusal as JSON, kept by no cache.
+fn refusal(r: crate::cluster::Refusal) -> Response {
+    let mut resp = err(
+        StatusCode::from_u16(r.code).unwrap_or(StatusCode::BAD_GATEWAY),
+        r.message,
+    );
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
+    );
+    resp
+}
+
+#[derive(Deserialize)]
+struct ConfigMapQuery {
+    ns: String,
+    name: String,
+    key: String,
+}
+
+/// `/api/kubernetes/configmap?ns=&name=&key=`: a post-it peeled off its board, one key's value.
+/// The board already lists each key and its size (the watch); a value is read only when asked
+/// for, with the viewer's own credentials, and not cached.
+async fn kubernetes_configmap(
+    State(app): State<Shared>,
+    user: Option<Extension<Arc<User>>>,
+    Query(q): Query<ConfigMapQuery>,
+) -> Response {
+    if !kube_name(&q.ns) || !kube_name(&q.name) {
+        return err(StatusCode::BAD_REQUEST, "ns and name are Kubernetes names");
     }
+    if !data_key(&q.key) {
+        return err(StatusCode::BAD_REQUEST, "key is a ConfigMap data key");
+    }
+    let got = if app.demo {
+        crate::cluster::demo_configmap(&q.ns, &q.name, &q.key)
+    } else {
+        let client = match kube_for(&app, user.as_ref().map(|u| &*u.0)).await {
+            Ok(c) => c,
+            Err(e) => return err(StatusCode::BAD_GATEWAY, e),
+        };
+        crate::cluster::open_configmap(&client, &q.ns, &q.name, &q.key).await
+    };
+    got.map_or_else(refusal, no_store)
 }
 
 /// A picture's stream: the whole of it, then each change; a viewer that falls behind gets the
@@ -1542,10 +1576,10 @@ mod tests {
     #[test]
     fn only_a_data_key_reaches_a_secret_read() {
         for ok in ["tls.crt", ".dockerconfigjson", "DB_PASSWORD", "a-b_c.d"] {
-            assert!(secret_key(ok), "{ok:?}");
+            assert!(data_key(ok), "{ok:?}");
         }
         for bad in ["", "a/b", "a b", "x?y", "%2e", &"a".repeat(254)] {
-            assert!(!secret_key(bad), "{bad:?}");
+            assert!(!data_key(bad), "{bad:?}");
         }
     }
 

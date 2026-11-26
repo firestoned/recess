@@ -289,6 +289,21 @@
         "policy",
         "adr-0054"
       ]
+    },
+    {
+      "id": "bug-021",
+      "timestamp": "2026-11-26",
+      "error_message": "Events: error returned by apiserver during watch: Internal error occurred: etcd event received with PrevKv=nil (key=\"/registry/events/flux-system/...\", modRevision=45830459, type=PUT): InternalError",
+      "file": "src/util.rs",
+      "root_cause": "The core cluster's kine (k0s on PostgreSQL) cannot replay that revision of an Event (a 500 on every watch from resourceVersion 45830458). kube-rs re-watches from the last revision after any error but 410, so the watch retried the same broken revision forever: no new Warning Events reached the cupboard and the note never cleared.",
+      "fix": "util::relisting(api, cfg): kube's watcher with backoff that, after a WatchError other than 410, waits 5 s and starts a fresh watch (a new list from now). Used by every watch: cluster.rs (2), admin.rs (2), engine.rs (2), vap.rs (1).",
+      "tags": [
+        "kubernetes",
+        "watch",
+        "kine",
+        "k0s",
+        "live-only"
+      ]
     }
   ]
 }

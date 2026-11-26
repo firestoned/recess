@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /* The Kubernetes page: agentsandbox.css's blueprint and admin.css's bar, with the pods' states. */
-:root { --dimmed: #4b5a74; }
+:root { --dimmed: #4b5a74; --cork: #fb923c; --helm: #f472b6; --operator: #2dd4bf; }
 
 .counts button.unready { border-color: rgba(251, 191, 36, .5); color: var(--seal); }
 .counts button.failing { border-color: rgba(248, 113, 113, .6); color: var(--bad); }
@@ -51,3 +51,32 @@
 .details .keys td:first-child { color: var(--ink); }
 .details .keys button { padding: 2px 8px; }
 .details pre.secret-value { color: var(--seal); max-height: 16em; overflow: auto; }
+
+/* The pin boards: cork orange; a note's colour says who made it (yellow by hand, pink by Helm,
+   teal by an operator), muted for the root CA's notice and for a note no pod uses. */
+.lbl.board b { color: var(--cork); font-size: 10px; letter-spacing: .16em; }
+.lbl.note b { font-size: 9px; }
+.lbl.note.hand b { color: var(--seal); }
+.lbl.note.helm b { color: var(--helm); }
+.lbl.note.owned b { color: var(--operator); }
+.lbl.note.notice b, .lbl.note.unused b { color: var(--muted); }
+.details .og-hand { color: var(--seal); } .details .og-helm { color: var(--helm); }
+.details .og-owned { color: var(--operator); } .details .og-notice { color: var(--muted); }
+.details pre.note-value { color: var(--ink); max-height: 16em; overflow: auto; }
+
+/* The admission policies: orange on their dais, grey when unbound; the cupboard and its shelves,
+   red when something was denied there, amber when only warned. */
+.lbl.vapgate b { color: #fb923c; font-size: 10.5px; letter-spacing: .16em; }
+.lbl.vap b { color: #fb923c; font-size: 9.5px; }
+.lbl.vap.unbound b { color: var(--muted); }
+.lbl.cupboard b { color: #fb923c; font-size: 10px; letter-spacing: .16em; }
+.lbl.cupboard.deny i { color: var(--bad); }
+.lbl.cupboard.warn i { color: var(--seal); }
+.lbl.cshelf b { font-size: 9.5px; color: var(--ink); }
+.lbl.cshelf.deny i { color: var(--bad); }
+.lbl.cshelf.warn i { color: var(--seal); }
+.details .st-allow { color: var(--ok); } .details .st-warn { color: var(--seal); }
+.details .st-audit { color: var(--ident); } .details .st-deny { color: var(--bad); }
+.details table.records td { word-break: normal; overflow-wrap: anywhere; vertical-align: top; }
+.details table.records td.what { white-space: nowrap; }
+.details table.records td.what .sub { display: block; }

@@ -1027,7 +1027,7 @@ impl Run {
         );
         let api: kube::Api<DynamicObject> = kube::Api::namespaced_with(client, ns, &ar);
         let cfg = watcher::Config::default().fields(&format!("metadata.name={name}"));
-        let mut stream = watcher(api, cfg).default_backoff().boxed();
+        let mut stream = crate::util::relisting(api, cfg);
         let mut prev = BTreeMap::new();
         let mut errors = 0u32;
         let mut last_phase = String::new();
@@ -1195,7 +1195,7 @@ impl Run {
     ) {
         let api: kube::Api<KubeEvent> = kube::Api::namespaced(client, ns);
         let since = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(30);
-        let mut stream = watcher(api, watcher::Config::default())
+        let mut stream = crate::util::relisting(api, watcher::Config::default())
             .applied_objects()
             .boxed();
         loop {

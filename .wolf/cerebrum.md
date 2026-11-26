@@ -23,6 +23,7 @@ budget_tokens: 2000
 - Rust, not Go: reuse mediatore's crates (mediatore-client, mediatore-proto) rather than shelling out.
 
 ## Key Learnings
+- [2026-11-26] ValidatingAdmissionPolicy hits are visible to an API client only as the API server's `/metrics` counter `apiserver_validating_admission_policy_check_total` (policy, binding, enforcement_action, error_type; no namespace, per API server instance, keyed apart by `process_start_time_seconds`). Where a denial happened comes only from Warning Events a controller records (`ValidatingAdmissionPolicy 'p' with binding 'b' denied request: ...`); a warning (`Validation failed for ValidatingAdmissionPolicy ...`) usually reaches only the client. src/vap.rs reads both, as the person.
 - [2026-11-20] The egress proxy's 4xx/5xx bodies carry its error code (`gateway_refused`, `gateway_unreachable`, a dial error); `curl -f` drops them. Workloads use `curl -sS --fail-with-body` so a failure says why.
 
 - [2026-11-20] The jail reaches the outside only as `$MEDIATORE_EGRESS_PROXY/<host>/<path>` for hosts in the claim's audiences (broker `audiences[].egress`, rules are path globs). No CONNECT, so HTTPS_PROXY tools fail; PyPI's absolute file URLs need an in-workload rewriting shim. Test workloads on the Linux build host with podman plus a stand-in proxy before a live claim.
@@ -53,6 +54,9 @@ budget_tokens: 2000
 - [2026-11-22] Stopped test servers with `pkill -f "recess web"`, which also matches the user's own running Recess. Stop only your own, by exact path and port.
 - [2026-11-24] The 3D views drew every frame forever (and spun, bobbed and auto-rotated), which ran Firefox's GPU process hot. Frames are on demand (theatre.js `wake()`; a view's frame returns whether it still moves): new motion must count itself as busy or ride a tween, and decorative motion on the clock is not wanted.
 - [2026-11-24] PR #10 squash-merged only its first two commits; later commits on the same branch were stranded. After a squash merge, start new work on a fresh branch from main.
+
+- [2026-11-26] `ssh slate 'pkill -f "<pattern>"; ...'` killed its own remote shell (the pattern is in that shell's argv) and the rest of the command never ran. Stop a server by the PIDs `pgrep` returns, with an anchored pattern, in a command of its own.
+- [2026-11-26] Pulled `cargo fmt` output back from slate with `rsync slate:builds/recess/src/ src/` while another session was editing the same tree; it could have reverted that session's edits. Format in place on the mac's files only, or never copy a whole directory back from the build host.
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
 <!-- Format: [YYYY-MM-DD] Description of what went wrong and what to do instead. -->
